@@ -270,7 +270,7 @@ int main(int, char **) {
   if (!glfwInit())
     return 1;
 
-  // Decide GL+GLSL versions
+    // Decide GL+GLSL versions
 #if defined(IMGUI_IMPL_OPENGL_ES2)
   // GL ES 2.0 + GLSL 100 (WebGL 1.0)
   const char *glsl_version = "#version 100";
@@ -290,6 +290,7 @@ int main(int, char **) {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // 3.2+ only
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // Required on Mac
+  glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
 #else
   // GL 3.0 + GLSL 130
   const char *glsl_version = "#version 130";
@@ -304,6 +305,7 @@ int main(int, char **) {
       1280, 720, "Dear ImGui & ImPlot GLFW+OpenGL3 example", nullptr, nullptr);
   if (window == nullptr)
     return 1;
+
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1); // Enable vsync
 
@@ -312,20 +314,53 @@ int main(int, char **) {
   ImGui::CreateContext();
   ImPlot::CreateContext();
 
-  char *filename = "/mnt/c/work/gokart-videos/GH010224.MP4";
+#ifdef __APPLE__
+
+  float xscale, yscale;
+  glfwGetWindowContentScale(window, &xscale, &yscale);
+  ImGuiIO &io = ImGui::GetIO();
+  // io.DisplayFramebufferScale = ImVec2(xscale, yscale);
+
+  ImGuiStyle &style = ImGui::GetStyle();
+  // style.ScaleAllSizes(1 / xscale);
+
+  float base_font_size = 16.0f; // Desired font size in points
+  ImFont *font = io.Fonts->AddFontFromFileTTF(
+      "/Users/denys/dev/pacer/3rdparty/imgui/misc/fonts/Roboto-Medium.ttf",
+      base_font_size * xscale);
+
+  font->Scale = 1 / yscale;
+
+  int display_w, display_h;
+  glfwGetFramebufferSize(window, &display_w, &display_h);
+  glViewport(0, 0, display_w * xscale, display_h * yscale);
+
+  io.DisplayFramebufferScale = ImVec2(xscale, yscale);
+  io.DisplaySize = ImVec2(display_w, display_h);
+
+  // Example using OpenGL glMatrixMode(GL_PROJECTION);
+  // glLoadIdentity();
+  // glOrtho(0.0f, 1 / xscale * display_w, 1 / yscale * display_h, 0.0f, -1.0f,
+  //         1.0f);
+#endif
+
+  char *filename = "/Users/denys/Documents/gokarting-ui/GH010219.MP4";
   MovieHandler m(filename);
 
   m.seek(0);
   std::vector<double> lats, lons;
   for (m.seek(0); !m.is_end(); m.next()) {
-    m.samples(&lats, &lons);
+    m.samples([&](GPSSample s) {
+      if (s.full_speed > 1e-6) {
+        lats.push_back(s.lat);
+        lons.push_back(s.lon);
+      }
+    });
   }
   m.seek(0);
 
   float duration = m.get_duration(), current = 0;
 
-  ImGuiIO &io = ImGui::GetIO();
-  (void)io;
   io.ConfigFlags |=
       ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
   io.ConfigFlags |=
@@ -426,6 +461,8 @@ int main(int, char **) {
       m.samples([&](auto s) { gps.push_back(s); });
     }
     ImGui::End();
+
+    printf("x scale: %.2f, y scale: %.2f\n", xscale, yscale);
 
     if (ImGui::Begin("Map")) {
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1))) {
@@ -551,7 +588,8 @@ int main(int, char **) {
           ImGui::TableNextRow();
           for (int column = 0; column < 5; column++) {
             ImGui::TableSetColumnIndex(column);
-            ImGui::Text("%.2f", reinterpret_cast<double *>(&gps[row])[column] * (column > 2 ? 3.6 : 1.0));
+            ImGui::Text("%.2f", reinterpret_cast<double *>(&gps[row])[column] *
+                                    (column > 2 ? 3.6 : 1.0));
           }
         }
         ImGui::EndTable();
