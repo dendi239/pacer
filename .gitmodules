@@ -1,0 +1,9 @@
+[submodule "3rdparty/imgui"]
+	path = 3rdparty/imgui
+	url = git@github.com:ocornut/imgui.git
+[submodule "3rdparty/implot"]
+	path = 3rdparty/implot
+	url = git@github.com:epezent/implot.git
+[submodule "3rdparty/gpmf-parser"]
+	path = 3rdparty/gpmf-parser
+	url = git@github.com:gopro/gpmf-parser.git
