@@ -10,5 +10,6 @@ find_package(glfw3 REQUIRED)
 find_package(OpenGL)
 
 add_subdirectory(3rdparty)
+add_subdirectory(libs)
 add_subdirectory(apps)
 add_subdirectory(examples)

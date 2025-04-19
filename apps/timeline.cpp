@@ -13,28 +13,25 @@
 // folder).
 // - Introduction, links and more at the top of imgui.cpp
 
-#include <algorithm>
-#include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include <sstream>
-#include <string>
 
-#include "GPMF_common.h"
-#include "GPMF_parser.h"
-#include "demo/GPMF_mp4reader.h"
-
+#include "geometry.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
 #include "implot.h"
 
-#include <stdexcept>
 #include <stdio.h>
 #include <strings.h>
 #include <vector>
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
+
+#include "laps.hpp"
+#include "movie-handler.hpp"
 
 // [Win32] Our example includes a copy of glfw3.lib pre-compiled with VS2010 to
 // maximize ease of testing and compatibility with old VS compilers. To link
@@ -57,211 +54,110 @@ static void glfw_error_callback(int error, const char *description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
-struct GPSSample {
-  double lat, lon, altitude, ground_speed, full_speed;
-};
+using pacer::GPSSample;
+using pacer::MovieHandler;
 
-ImPlotPoint ToPoint(int index, void *data) {
-  GPSSample *data_ = reinterpret_cast<GPSSample *>(data);
-  return ImPlotPoint(data_[index].lon, data_[index].lat);
+using pacer::Laps;
+
+ImPlotPoint StartGetter(int index, void *data) {
+  Laps *laps = reinterpret_cast<Laps *>(data);
+  return index ? laps->start_line.second : laps->start_line.first;
 }
 
-struct MovieHandler {
-  uint32_t index = 0;
-  size_t mp4handle;
+struct LapsDisplay {
+  Laps &laps;
 
-  explicit MovieHandler(size_t mp4handle) : mp4handle(mp4handle) {}
-  explicit MovieHandler(char *filename)
-      : mp4handle(OpenMP4Source(filename, MOV_GPMF_TRAK_TYPE,
-                                MOV_GPMF_TRAK_SUBTYPE, 0)) {
-    if (mp4handle == 0) {
-      throw std::runtime_error(
-          (std::string("Failed to open file: ") + std::string(filename))
-              .c_str());
+  std::pair<pacer::Point, pacer::Point> bounds = {{1, 1}, {0, 0}};
+
+  void DragTimingLine(pacer::Segment *s, const char *name, int drag_id) {
+    auto get_point = [](int index, void *data) -> ImPlotPoint {
+      auto &s = *reinterpret_cast<pacer::Segment *>(data);
+      return index ? s.second : s.first;
+    };
+
+    ImPlot::PlotLineG(name, get_point, s, 2, 0);
+    ImPlot::PlotScatterG(name, get_point, s, 2, 0);
+
+    ImPlot::DragPoint(2 * drag_id + 1, &s->first.x, &s->first.y,
+                      ImPlot::GetLastItemColor());
+    ImPlot::DragPoint(2 * drag_id + 2, &s->second.x, &s->second.y,
+                      ImPlot::GetLastItemColor());
+  }
+
+  void DisplayMap() {
+    if (bounds.first.x >= bounds.second.x) {
+      bounds = laps.MinMax();
+    }
+    auto [min_, max_] = bounds;
+
+    ImPlot::SetupAxisLimits(ImAxis_X1, min_.x, max_.x);
+    ImPlot::SetupAxisLimits(ImAxis_Y1, min_.y, max_.y);
+
+    ImPlot::PlotLineG(
+        "trace",
+        [](int index, void *data) {
+          auto &laps = *reinterpret_cast<Laps *>(data);
+          return ImPlotPoint{laps.points[index].first.lon,
+                             laps.points[index].first.lat};
+        },
+        reinterpret_cast<void *>(&laps), laps.points.size());
+
+    DragTimingLine(&laps.start_line, "Start", 0);
+    for (int i = 0; i < laps.sector_lines.size(); ++i) {
+      auto &s = laps.sector_lines[i];
+      std::stringstream ss;
+      ss << "Sector " << i + 1;
+      DragTimingLine(&s, ss.str().c_str(), i + 1);
     }
   }
 
-  uint32_t samples(std::vector<double> *lat, std::vector<double> *lon) {
-    return samples([&](GPSSample s) {
-      lat->push_back(s.lat);
-      lon->push_back(s.lon);
-    });
-  }
-
-  template <class F> uint32_t samples(F on_sample) {
-    uint32_t payloadsize = GetPayloadSize(mp4handle, index);
-    size_t payloadres = 0;
-    payloadres = GetPayloadResource(mp4handle, payloadres, payloadsize);
-    uint32_t *payload = GetPayload(mp4handle, payloadres, index);
-
-    if (payload == nullptr) {
-      printf("No payload\n");
-      return 1;
+  bool DisplayTable() const {
+    if (ImGui::Button("Add sector")) {
+      laps.sector_lines.push_back(laps.PickRandomStart());
+    }
+    if (ImGui::Button("Reset sectors")) {
+      laps.sector_lines.clear();
     }
 
-    GPMF_stream metadata_stream, *ms = &metadata_stream;
-    auto ret = GPMF_Init(ms, payload, payloadsize);
-    if (ret != GPMF_OK) {
-      printf("No init\n");
-      return ret;
+    size_t sector_count = 1 + laps.sector_lines.size();
+    if (!ImGui::BeginTable("Laps", 3 + sector_count)) {
+      return false;
     }
 
-    while (GPMF_OK ==
-           GPMF_FindNext(ms, STR2FOURCC("STRM"),
-                         GPMF_LEVELS(GPMF_RECURSE_LEVELS | GPMF_TOLERANT))) {
+    ImGui::TableSetupColumn("start");
+    ImGui::TableSetupColumn("points");
+    ImGui::TableSetupColumn("laptime");
+    for (size_t i = 0; i < sector_count; ++i) {
+      std::stringstream ss;
+      ss << "S" << i + 1;
+      ImGui::TableSetupColumn(ss.str().c_str());
+    }
+    ImGui::TableHeadersRow();
 
-      if (ret != GPMF_OK) {
-        printf("No FindNext gps data\n");
-        return ret;
-      }
+    for (int row = 0, i_sector = 0; row < laps.laps.size(); ++row) {
+      ImGui::TableNextRow();
 
-      ret = GPMF_SeekToSamples(ms);
-      if (ret != GPMF_OK) {
-        printf("No Seek to Samples\n");
-        return ret;
-      }
+      ImGui::TableSetColumnIndex(0);
+      ImGui::Text("%.3f", laps.laps[row].start.time);
 
-      char *rawdata = (char *)GPMF_RawData(ms);
-      uint32_t key = GPMF_Key(ms);
-      GPMF_SampleType type = GPMF_Type(ms);
-      uint32_t samples = GPMF_Repeat(ms);
-      uint32_t elements = GPMF_ElementsInStruct(ms);
+      ImGui::TableSetColumnIndex(1);
+      ImGui::Text("%zul",
+                  laps.laps[row].finish_index - laps.laps[row].start_index);
 
-      if (key != STR2FOURCC("GPS5")) {
-        continue;
-      }
+      ImGui::TableSetColumnIndex(2);
+      ImGui::Text("%.3f", laps.laps[row].Time());
 
-      if (samples) {
-        uint32_t buffersize = samples * elements * sizeof(double);
-        GPMF_stream find_stream;
-        double *ptr, *tmpbuffer = (double *)malloc(buffersize);
-
-#define MAX_UNITS 64
-#define MAX_UNITLEN 8
-        char units[MAX_UNITS][MAX_UNITLEN] = {""};
-        uint32_t unit_samples = 1;
-
-        char complextype[MAX_UNITS] = {""};
-        uint32_t type_samples = 1;
-
-        if (tmpbuffer) {
-          uint32_t i, j;
-
-          // Search for any units to display
-          GPMF_CopyState(ms, &find_stream);
-          if (GPMF_OK == GPMF_FindPrev(
-                             &find_stream, GPMF_KEY_SI_UNITS,
-                             GPMF_LEVELS(GPMF_CURRENT_LEVEL | GPMF_TOLERANT)) ||
-              GPMF_OK == GPMF_FindPrev(
-                             &find_stream, GPMF_KEY_UNITS,
-                             GPMF_LEVELS(GPMF_CURRENT_LEVEL | GPMF_TOLERANT))) {
-            char *data = (char *)GPMF_RawData(&find_stream);
-            uint32_t ssize = GPMF_StructSize(&find_stream);
-            if (ssize > MAX_UNITLEN - 1)
-              ssize = MAX_UNITLEN - 1;
-            unit_samples = GPMF_Repeat(&find_stream);
-
-            for (i = 0; i < unit_samples && i < MAX_UNITS; i++) {
-              memcpy(units[i], data, ssize);
-              units[i][ssize] = 0;
-              data += ssize;
-            }
-          }
-
-          // GPMF_FormattedData(ms, tmpbuffer, buffersize, 0, samples); //
-          // Output data in LittleEnd, but no scale
-          if (GPMF_OK ==
-              GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
-                              GPMF_TYPE_DOUBLE)) // Output scaled data as floats
-          {
-
-            ptr = tmpbuffer;
-            int pos = 0;
-            union {
-              GPSSample gps;
-              double values[5];
-            } r;
-
-            for (i = 0; i < samples; i++) {
-              printf("  %c%c%c%c ", PRINTF_4CC(key));
-
-              for (j = 0; j < elements; j++) {
-                if (type == GPMF_TYPE_STRING_ASCII) {
-
-                  printf("%c", rawdata[pos]);
-                  pos++;
-                  ptr++;
-                } else if (type_samples == 0) // no TYPE structure
-                {
-
-                  printf("%.3f%s, ", *ptr++, units[j % unit_samples]);
-                } else if (complextype[j] != 'F') {
-                  r.values[j % unit_samples] = *ptr;
-                  if ((j + 1) % unit_samples == 0) {
-                    on_sample(r.gps);
-                  }
-
-                  printf("%.3f%s, ", *ptr++, units[j % unit_samples]);
-
-                  pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
-                } else if (type_samples && complextype[j] == GPMF_TYPE_FOURCC) {
-                  ptr++;
-
-                  printf("%c%c%c%c, ", rawdata[pos], rawdata[pos + 1],
-                         rawdata[pos + 2], rawdata[pos + 3]);
-                  pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
-                }
-              }
-
-              printf("\n");
-            }
-          }
-          free(tmpbuffer);
+      for (size_t i = 0; i < sector_count; ++i, ++i_sector) {
+        ImGui::TableSetColumnIndex(3 + i);
+        if (i_sector < laps.sectors.size()) {
+          ImGui::Text("%.3f", laps.sectors[i_sector].Time());
         }
       }
     }
 
-    return ret;
+    ImGui::EndTable();
+    return true;
   }
-
-  uint32_t seek(float target) {
-    double in, out;
-    uint32_t ret = GPMF_OK;
-    do {
-      ret = GetPayloadTime(mp4handle, index, &in, &out);
-      if (ret == GPMF_OK) {
-        if (out <= target)
-          ++index;
-        if (target < in)
-          --index;
-        printf("Index: %d ret: %d, target: %.2f, in: %.2f, out: %.2f\n", index,
-               ret, target, in, out);
-      }
-    } while (ret == GPMF_OK && in < out && (target > out) || (target < in));
-    if (!(in < out)) {
-      --index;
-    }
-
-    return ret;
-  }
-
-  void next() { ++index; }
-
-  bool is_end() {
-    double in, out;
-    if (GetPayloadTime(mp4handle, index, &in, &out) != GPMF_OK) {
-      return true;
-    }
-    return in + 1e-9 >= out;
-  }
-
-  std::pair<double, double> current_time_span() const {
-    double in, out;
-    GetPayloadTime(mp4handle, index, &in, &out);
-    return {in, out};
-  }
-
-  float get_duration() const { return GetDuration(mp4handle); }
 };
 
 // Main code
@@ -270,7 +166,7 @@ int main(int, char **) {
   if (!glfwInit())
     return 1;
 
-    // Decide GL+GLSL versions
+  // Decide GL+GLSL versions
 #if defined(IMGUI_IMPL_OPENGL_ES2)
   // GL ES 2.0 + GLSL 100 (WebGL 1.0)
   const char *glsl_version = "#version 100";
@@ -314,11 +210,12 @@ int main(int, char **) {
   ImGui::CreateContext();
   ImPlot::CreateContext();
 
+  float xscale = 1, yscale = 1;
+  ImGuiIO &io = ImGui::GetIO();
+
 #ifdef __APPLE__
 
-  float xscale, yscale;
   glfwGetWindowContentScale(window, &xscale, &yscale);
-  ImGuiIO &io = ImGui::GetIO();
   // io.DisplayFramebufferScale = ImVec2(xscale, yscale);
 
   ImGuiStyle &style = ImGui::GetStyle();
@@ -344,22 +241,29 @@ int main(int, char **) {
   //         1.0f);
 #endif
 
-  char *filename = "/Users/denys/Documents/gokarting-ui/GH010219.MP4";
+  // char *filename = "/Users/denys/Documents/gokarting-ui/GH010219.MP4";
+  const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
   MovieHandler m(filename);
 
-  m.seek(0);
-  std::vector<double> lats, lons;
-  for (m.seek(0); !m.is_end(); m.next()) {
-    m.samples([&](GPSSample s) {
+  m.Seek(0);
+  Laps laps;
+
+  for (m.Seek(0); !m.IsEnd(); m.Next()) {
+    auto [start, end] = m.CurrentTimeSpan();
+    m.Samples([&](GPSSample s, size_t current, size_t total) {
       if (s.full_speed > 1e-6) {
-        lats.push_back(s.lat);
-        lons.push_back(s.lon);
+        auto t = start + current * (end - start) / total;
+        laps.points.emplace_back(s, t);
       }
     });
   }
-  m.seek(0);
 
-  float duration = m.get_duration(), current = 0;
+  laps.start_line = laps.PickRandomStart();
+  auto laps_display = LapsDisplay{laps};
+
+  m.Seek(0);
+
+  float duration = m.GetTotalDuration(), current = 0;
 
   io.ConfigFlags |=
       ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
@@ -442,6 +346,8 @@ int main(int, char **) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    laps.Update();
+
     // 1. Show the big demo window (Most of the sample code is in
     // ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear
     // ImGui!).
@@ -457,23 +363,16 @@ int main(int, char **) {
     if (ImGui::Begin("timeline")) {
       ImGui::Text("Duration: %.2f", duration);
       ImGui::SliderFloat("Time", &current, 0, duration);
-      m.seek(current);
-      m.samples([&](auto s) { gps.push_back(s); });
+      m.Seek(current);
+      m.Samples([&](auto s, size_t, size_t) { gps.push_back(s); });
     }
     ImGui::End();
 
-    printf("x scale: %.2f, y scale: %.2f\n", xscale, yscale);
-
     if (ImGui::Begin("Map")) {
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1))) {
-        ImPlot::SetupAxisLimits(ImAxis_Y1,
-                                *std::min_element(lats.begin(), lats.end()),
-                                *std::max_element(lats.begin(), lats.end()));
-        ImPlot::SetupAxisLimits(ImAxis_X1,
-                                *std::min_element(lons.begin(), lons.end()),
-                                *std::max_element(lons.begin(), lons.end()));
-        ImPlot::PlotScatterG("data", ToPoint, gps.data(), gps.size());
-        ImPlot::PlotLine("trace", lons.data(), lats.data(), lats.size());
+        laps_display.DisplayMap();
+        ImPlot::PlotScatterG("data", pacer::ToImPlotPoint, gps.data(),
+                             gps.size());
         std::stringstream ss;
         ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
         ImPlot::PlotText(ss.str().data(), gps.back().lon, gps.back().lat);
@@ -519,7 +418,7 @@ int main(int, char **) {
     }
 
     if (ImGui::Begin("Telemetry data")) {
-      auto [start, end] = m.current_time_span();
+      auto [start, end] = m.CurrentTimeSpan();
       ImGui::Text("Current time: %.3f %.3f", start, end);
 
       // Expose a few Borders related flags interactively
@@ -594,6 +493,11 @@ int main(int, char **) {
         }
         ImGui::EndTable();
       }
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Laps")) {
+      laps_display.DisplayTable();
     }
     ImGui::End();
 
