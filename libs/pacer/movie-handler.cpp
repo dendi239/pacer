@@ -205,4 +205,39 @@ uint32_t MovieHandler::Samples(void *data,
   return ret;
 }
 
+uint32_t SequentialGPSSource::Samples(
+    void *data,
+    void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
+                      size_t /*current_index*/, size_t /*total_records*/)) {
+  return current_->Samples(data, on_sample);
+}
+bool SequentialGPSSource::IsEnd() {
+  return current_ == right_ && current_->IsEnd();
+}
+double SequentialGPSSource::GetTotalDuration() const {
+  return left_->GetTotalDuration() + right_->GetTotalDuration();
+}
+uint32_t SequentialGPSSource::Seek(double target) {
+  if (auto left_duration = left_->GetTotalDuration(); target < left_duration) {
+    if (current_ == right_)
+      right_->Seek(0);
+    return (current_ = left_)->Seek(target);
+  } else {
+    target -= left_->GetTotalDuration();
+    return (current_ = right_)->Seek(target);
+  }
+}
+void SequentialGPSSource::Next() {
+  if (current_ == left_ && current_->IsEnd())
+    current_ = right_;
+  return current_->Next();
+}
+auto SequentialGPSSource::CurrentTimeSpan() const -> std::pair<double, double> {
+  auto [start, end] = current_->CurrentTimeSpan();
+  if (current_ == right_) {
+    auto left_len = left_->GetTotalDuration();
+    return {start + left_len, end + left_len};
+  }
+  return {start, end};
+}
 } // namespace pacer

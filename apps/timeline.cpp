@@ -17,21 +17,21 @@
 #include <iostream>
 #include <sstream>
 
-#include "geometry.hpp"
+#include "datatypes.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
 #include "implot.h"
 
-#include <stdio.h>
-#include <strings.h>
-#include <vector>
-#define GL_SILENCE_DEPRECATION
-#include <GLFW/glfw3.h> // Will drag system OpenGL headers
-
+#include "geometry.hpp"
 #include "laps.hpp"
 #include "movie-handler.hpp"
+
+#include <stdio.h>
+#include <strings.h>
+#define GL_SILENCE_DEPRECATION
+#include <GLFW/glfw3.h> // Will drag system OpenGL headers
 
 // [Win32] Our example includes a copy of glfw3.lib pre-compiled with VS2010 to
 // maximize ease of testing and compatibility with old VS compilers. To link
@@ -64,8 +64,11 @@ ImPlotPoint StartGetter(int index, void *data) {
   return index ? laps->start_line.second : laps->start_line.first;
 }
 
+struct TelemetryDisplay {};
+
 struct LapsDisplay {
   Laps &laps;
+  int selected_lap = -1;
 
   std::pair<pacer::Point, pacer::Point> bounds = {{1, 1}, {0, 0}};
 
@@ -111,7 +114,25 @@ struct LapsDisplay {
     }
   }
 
-  bool DisplayTable() const {
+  void DisplayLapTelemetry() const {
+    if (selected_lap != -1 && ImPlot::BeginPlot("Lap", ImVec2(-1, -1))) {
+      ImPlot::PlotLineG(
+          "speed trace",
+          [](int index, void *data) {
+            auto &ld = *reinterpret_cast<LapsDisplay *>(data);
+            auto [gps, time] =
+                ld.laps
+                    .points[index + ld.laps.laps[ld.selected_lap].start_index];
+            return ImPlotPoint{time - ld.laps.laps[ld.selected_lap].start.time,
+                               gps.full_speed * 3.6};
+          },
+          (void *)this, laps.laps[selected_lap].Count());
+
+      ImPlot::EndPlot();
+    }
+  }
+
+  bool DisplayTable() {
     if (ImGui::Button("Add sector")) {
       laps.sector_lines.push_back(laps.PickRandomStart());
     }
@@ -120,7 +141,9 @@ struct LapsDisplay {
     }
 
     size_t sector_count = 1 + laps.sector_lines.size();
-    if (!ImGui::BeginTable("Laps", 3 + sector_count)) {
+    if (!ImGui::BeginTable("Laps", 3 + 2 * sector_count,
+                           ImGuiTableFlags_RowBg |
+                               ImGuiTableFlags_BordersInnerV)) {
       return false;
     }
 
@@ -130,6 +153,7 @@ struct LapsDisplay {
     for (size_t i = 0; i < sector_count; ++i) {
       std::stringstream ss;
       ss << "S" << i + 1;
+      ImGui::TableSetupColumn("");
       ImGui::TableSetupColumn(ss.str().c_str());
     }
     ImGui::TableHeadersRow();
@@ -141,14 +165,23 @@ struct LapsDisplay {
       ImGui::Text("%.3f", laps.laps[row].start.time);
 
       ImGui::TableSetColumnIndex(1);
-      ImGui::Text("%zul",
+      ImGui::Text("%zu",
                   laps.laps[row].finish_index - laps.laps[row].start_index);
 
       ImGui::TableSetColumnIndex(2);
-      ImGui::Text("%.3f", laps.laps[row].Time());
+      if (ImGui::Button(std::format("{:.3f}", laps.laps[row].Time()).c_str())) {
+        selected_lap = row == selected_lap ? -1 : row;
+      }
 
       for (size_t i = 0; i < sector_count; ++i, ++i_sector) {
-        ImGui::TableSetColumnIndex(3 + i);
+        ImGui::TableSetColumnIndex(3 + 2 * i);
+        if (i_sector < laps.sectors.size()) {
+
+          ImGui::Text("%.3f",
+                      laps.sectors[i_sector].start.point.full_speed * 3.6);
+        }
+        ImGui::TableSetColumnIndex(4 + 2 * i);
+
         if (i_sector < laps.sectors.size()) {
           ImGui::Text("%.3f", laps.sectors[i_sector].Time());
         }
@@ -237,20 +270,36 @@ int main(int, char **) {
 
   // Example using OpenGL glMatrixMode(GL_PROJECTION);
   // glLoadIdentity();
-  // glOrtho(0.0f, 1 / xscale * display_w, 1 / yscale * display_h, 0.0f, -1.0f,
+  // glOrtho(0.0f, 1 / xscale * display_w, 1 / yscale * display_h, 0.0f,
+  // -1.0f,
   //         1.0f);
 #endif
 
-  // char *filename = "/Users/denys/Documents/gokarting-ui/GH010219.MP4";
-  const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
-  MovieHandler m(filename);
+  const char *filenames[] = {
+      "/Users/denys/Documents/gokarting-ui/GH010219.MP4",
+      "/Users/denys/Documents/gokarting-ui/GH020219.MP4",
+      "/Users/denys/Documents/gokarting-ui/GH030219.MP4",
+      "/Users/denys/Documents/gokarting-ui/GH040219.MP4",
+      "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
+  };
+
+  MovieHandler mm[] = {
+      MovieHandler(filenames[0]), MovieHandler(filenames[1]),
+      MovieHandler(filenames[2]), MovieHandler(filenames[3]),
+      MovieHandler(filenames[4]),
+  };
+  pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m13(&m12, &mm[2]),
+      m14(&m13, &mm[3]), m(&m14, &mm[4]);
+
+  // const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
+  // MovieHandler m(filename);
 
   m.Seek(0);
   Laps laps;
 
   for (m.Seek(0); !m.IsEnd(); m.Next()) {
     auto [start, end] = m.CurrentTimeSpan();
-    m.Samples([&](GPSSample s, size_t current, size_t total) {
+    m.pacer::GPSSource::Samples([&](GPSSample s, size_t current, size_t total) {
       if (s.full_speed > 1e-6) {
         auto t = start + current * (end - start) / total;
         laps.points.emplace_back(s, t);
@@ -287,14 +336,15 @@ int main(int, char **) {
   // them.
   // - AddFontFromFileTTF() will return the ImFont* so you can store it if you
   // need to select the font among multiple.
-  // - If the file cannot be loaded, the function will return a nullptr. Please
-  // handle those errors in your application (e.g. use an assertion, or display
-  // an error and quit).
-  // - The fonts will be rasterized at a given size (w/ oversampling) and stored
-  // into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which
-  // ImGui_ImplXXXX_NewFrame below will call.
-  // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use Freetype
-  // for higher quality font rendering.
+  // - If the file cannot be loaded, the function will return a nullptr.
+  // Please handle those errors in your application (e.g. use an assertion, or
+  // display an error and quit).
+  // - The fonts will be rasterized at a given size (w/ oversampling) and
+  // stored into a texture when calling
+  // ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame
+  // below will call.
+  // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use
+  // Freetype for higher quality font rendering.
   // - Read 'docs/FONTS.md' for more instructions and details.
   // - Remember that in C/C++ if you want to include a backslash \ in a string
   // literal you need to write a double backslash \\ !
@@ -349,8 +399,8 @@ int main(int, char **) {
     laps.Update();
 
     // 1. Show the big demo window (Most of the sample code is in
-    // ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear
-    // ImGui!).
+    // ImGui::ShowDemoWindow()! You can browse its code to learn more about
+    // Dear ImGui!).
     if (show_imgui_demo_window)
       ImGui::ShowDemoWindow(&show_imgui_demo_window);
 
@@ -362,9 +412,14 @@ int main(int, char **) {
 
     if (ImGui::Begin("timeline")) {
       ImGui::Text("Duration: %.2f", duration);
-      ImGui::SliderFloat("Time", &current, 0, duration);
-      m.Seek(current);
-      m.Samples([&](auto s, size_t, size_t) { gps.push_back(s); });
+      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() - 80);
+      if (ImGui::SliderFloat("Time", &current, 0, duration))
+        m.Seek(current);
+      ImGui::SameLine();
+      if (ImGui::Button(">"))
+        m.Next();
+      m.pacer::GPSSource::Samples(
+          [&](auto s, size_t, size_t) { gps.push_back(s); });
     }
     ImGui::End();
 
@@ -381,8 +436,8 @@ int main(int, char **) {
     }
     ImGui::End();
 
-    // 2. Show a simple window that we create ourselves. We use a Begin/End pair
-    // to create a named window.
+    // 2. Show a simple window that we create ourselves. We use a Begin/End
+    // pair to create a named window.
     {
       static float f = 0.0f;
       static int counter = 0;
@@ -393,8 +448,8 @@ int main(int, char **) {
       ImGui::Text("This is some useful text."); // Display some text (you can
                                                 // use a format strings too)
       ImGui::Checkbox("ImGui demo Window",
-                      &show_imgui_demo_window); // Edit bools storing our window
-                                                // open/close state
+                      &show_imgui_demo_window); // Edit bools storing our
+                                                // window open/close state
       ImGui::Checkbox("ImPlot demo Window",
                       &show_implot_demo_window); // Edit bools storing our
                                                  // window open/close state
@@ -432,7 +487,7 @@ int main(int, char **) {
                            ImGuiTableFlags_RowBg);
       ImGui::CheckboxFlags("ImGuiTableFlags_Borders", &flags,
                            ImGuiTableFlags_Borders);
-      ImGui::SameLine();
+      // ImGui::SameLine();
       ImGui::Indent();
 
       ImGui::CheckboxFlags("ImGuiTableFlags_BordersH", &flags,
@@ -472,8 +527,8 @@ int main(int, char **) {
 
       if (ImGui::BeginTable("table1", 5, flags)) {
         // Display headers so we can inspect their interaction with borders
-        // (Headers are not the main purpose of this section of the demo, so we
-        // are not elaborating on them now. See other sections for details)
+        // (Headers are not the main purpose of this section of the demo, so
+        // we are not elaborating on them now. See other sections for details)
         if (display_headers) {
           ImGui::TableSetupColumn("Latitude");
           ImGui::TableSetupColumn("Longitude");
@@ -501,13 +556,18 @@ int main(int, char **) {
     }
     ImGui::End();
 
+    if (ImGui::Begin("Lap Telemetry")) {
+      laps_display.DisplayLapTelemetry();
+    }
+    ImGui::End();
+
     // 3. Show another simple window.
     if (show_another_window) {
       ImGui::Begin(
           "Another Window",
           &show_another_window); // Pass a pointer to our bool variable (the
-                                 // window will have a closing button that will
-                                 // clear the bool when clicked)
+                                 // window will have a closing button that
+                                 // will clear the bool when clicked)
       ImGui::Text("Hello from another window!");
       if (ImGui::Button("Close Me"))
         show_another_window = false;
