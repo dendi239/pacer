@@ -6,7 +6,8 @@ It's still pretty much work-in-progress so proceed with caution.
 
 ## getting started
 
-I believe, main dependencies are already 
+I believe, main dependencies are already present in the project as git submodules: `gpmf-parser`, `imgui`, `implot`.
+On top of that you'd need some sort of C++ compiler, `cmake`, `libglfw` (for GUI stuff), all of that should be installable from `brew` or `apt` (I ran this thing on Windows under WSL 2 -- it has X-Forwarding builtin).
 
 Bunch of views to take a look at:
 - gps map;
@@ -36,7 +37,7 @@ Some components:
 - nanobind-based python bindings to rapidly experiment in python (I've been putting it off due to shitty code);
 - clean up the code (lmao).
 
-## licence
+## credits
 
 It's ain't much, but it's honest work.
 
