@@ -7,7 +7,7 @@
 #include <cstring>
 #include <utility>
 
-#include "datatypes.hpp"
+#include <pacer/datatypes/datatypes.hpp>
 
 namespace pacer {
 

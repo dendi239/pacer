@@ -37,7 +37,7 @@ uint32_t MovieHandler::Seek(double target) {
       if (target < in)
         --index_;
     }
-  } while (ret == GPMF_OK && in < out && (target > out) || (target < in));
+  } while (ret == GPMF_OK && in < out && ((target > out) || (target < in)));
   if (!(in < out)) {
     --index_;
   }

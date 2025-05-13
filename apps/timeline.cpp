@@ -17,19 +17,22 @@
 #include <iostream>
 #include <sstream>
 
-#include "datatypes.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
 #include "implot.h"
+#include "implot_internal.h"
 
-#include "geometry.hpp"
-#include "laps.hpp"
-#include "movie-handler.hpp"
+#include <pacer/datatypes/datatypes.hpp>
+#include <pacer/geometry/geometry.hpp>
+#include <pacer/laps-display/laps-display.hpp>
+#include <pacer/laps/laps.hpp>
+#include <pacer/movie-handler/movie-handler.hpp>
 
 #include <stdio.h>
 #include <strings.h>
+#include <vector>
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
 
@@ -56,142 +59,6 @@ static void glfw_error_callback(int error, const char *description) {
 
 using pacer::GPSSample;
 using pacer::MovieHandler;
-
-using pacer::Laps;
-
-ImPlotPoint StartGetter(int index, void *data) {
-  Laps *laps = reinterpret_cast<Laps *>(data);
-  return index ? laps->start_line.second : laps->start_line.first;
-}
-
-struct TelemetryDisplay {};
-
-struct LapsDisplay {
-  Laps &laps;
-  int selected_lap = -1;
-
-  std::pair<pacer::Point, pacer::Point> bounds = {{1, 1}, {0, 0}};
-
-  void DragTimingLine(pacer::Segment *s, const char *name, int drag_id) {
-    auto get_point = [](int index, void *data) -> ImPlotPoint {
-      auto &s = *reinterpret_cast<pacer::Segment *>(data);
-      return index ? s.second : s.first;
-    };
-
-    ImPlot::PlotLineG(name, get_point, s, 2, 0);
-    ImPlot::PlotScatterG(name, get_point, s, 2, 0);
-
-    ImPlot::DragPoint(2 * drag_id + 1, &s->first.x, &s->first.y,
-                      ImPlot::GetLastItemColor());
-    ImPlot::DragPoint(2 * drag_id + 2, &s->second.x, &s->second.y,
-                      ImPlot::GetLastItemColor());
-  }
-
-  void DisplayMap() {
-    if (bounds.first.x >= bounds.second.x) {
-      bounds = laps.MinMax();
-    }
-    auto [min_, max_] = bounds;
-
-    ImPlot::SetupAxisLimits(ImAxis_X1, min_.x, max_.x);
-    ImPlot::SetupAxisLimits(ImAxis_Y1, min_.y, max_.y);
-
-    ImPlot::PlotLineG(
-        "trace",
-        [](int index, void *data) {
-          auto &laps = *reinterpret_cast<Laps *>(data);
-          return ImPlotPoint{laps.points[index].first.lon,
-                             laps.points[index].first.lat};
-        },
-        reinterpret_cast<void *>(&laps), laps.points.size());
-
-    DragTimingLine(&laps.start_line, "Start", 0);
-    for (int i = 0; i < laps.sector_lines.size(); ++i) {
-      auto &s = laps.sector_lines[i];
-      std::stringstream ss;
-      ss << "Sector " << i + 1;
-      DragTimingLine(&s, ss.str().c_str(), i + 1);
-    }
-  }
-
-  void DisplayLapTelemetry() const {
-    if (selected_lap != -1 && ImPlot::BeginPlot("Lap", ImVec2(-1, -1))) {
-      ImPlot::PlotLineG(
-          "speed trace",
-          [](int index, void *data) {
-            auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-            auto [gps, time] =
-                ld.laps
-                    .points[index + ld.laps.laps[ld.selected_lap].start_index];
-            return ImPlotPoint{time - ld.laps.laps[ld.selected_lap].start.time,
-                               gps.full_speed * 3.6};
-          },
-          (void *)this, laps.laps[selected_lap].Count());
-
-      ImPlot::EndPlot();
-    }
-  }
-
-  bool DisplayTable() {
-    if (ImGui::Button("Add sector")) {
-      laps.sector_lines.push_back(laps.PickRandomStart());
-    }
-    if (ImGui::Button("Reset sectors")) {
-      laps.sector_lines.clear();
-    }
-
-    size_t sector_count = 1 + laps.sector_lines.size();
-    if (!ImGui::BeginTable("Laps", 3 + 2 * sector_count,
-                           ImGuiTableFlags_RowBg |
-                               ImGuiTableFlags_BordersInnerV)) {
-      return false;
-    }
-
-    ImGui::TableSetupColumn("start");
-    ImGui::TableSetupColumn("points");
-    ImGui::TableSetupColumn("laptime");
-    for (size_t i = 0; i < sector_count; ++i) {
-      std::stringstream ss;
-      ss << "S" << i + 1;
-      ImGui::TableSetupColumn("");
-      ImGui::TableSetupColumn(ss.str().c_str());
-    }
-    ImGui::TableHeadersRow();
-
-    for (int row = 0, i_sector = 0; row < laps.laps.size(); ++row) {
-      ImGui::TableNextRow();
-
-      ImGui::TableSetColumnIndex(0);
-      ImGui::Text("%.3f", laps.laps[row].start.time);
-
-      ImGui::TableSetColumnIndex(1);
-      ImGui::Text("%zu",
-                  laps.laps[row].finish_index - laps.laps[row].start_index);
-
-      ImGui::TableSetColumnIndex(2);
-      if (ImGui::Button(std::format("{:.3f}", laps.laps[row].Time()).c_str())) {
-        selected_lap = row == selected_lap ? -1 : row;
-      }
-
-      for (size_t i = 0; i < sector_count; ++i, ++i_sector) {
-        ImGui::TableSetColumnIndex(3 + 2 * i);
-        if (i_sector < laps.sectors.size()) {
-
-          ImGui::Text("%.3f",
-                      laps.sectors[i_sector].start.point.full_speed * 3.6);
-        }
-        ImGui::TableSetColumnIndex(4 + 2 * i);
-
-        if (i_sector < laps.sectors.size()) {
-          ImGui::Text("%.3f", laps.sectors[i_sector].Time());
-        }
-      }
-    }
-
-    ImGui::EndTable();
-    return true;
-  }
-};
 
 // Main code
 int main(int, char **) {
@@ -295,29 +162,28 @@ int main(int, char **) {
   // MovieHandler m(filename);
 
   m.Seek(0);
-  Laps laps;
+  pacer::Laps laps;
 
   for (m.Seek(0); !m.IsEnd(); m.Next()) {
     auto [start, end] = m.CurrentTimeSpan();
     m.pacer::GPSSource::Samples([&](GPSSample s, size_t current, size_t total) {
       if (s.full_speed > 1e-6) {
         auto t = start + current * (end - start) / total;
-        laps.points.emplace_back(s, t);
+        laps.AddPoint(s, t);
       }
     });
   }
 
   laps.start_line = laps.PickRandomStart();
-  auto laps_display = LapsDisplay{laps};
+  auto laps_display = pacer::LapsDisplay{laps};
 
   m.Seek(0);
 
   float duration = m.GetTotalDuration(), current = 0;
 
-  io.ConfigFlags |=
-      ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-  io.ConfigFlags |=
-      ImGuiConfigFlags_NavEnableGamepad; // Enable Gamepad Controls
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
   // Setup Dear ImGui style
   ImGui::StyleColorsDark();
@@ -426,51 +292,31 @@ int main(int, char **) {
     if (ImGui::Begin("Map")) {
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1))) {
         laps_display.DisplayMap();
-        ImPlot::PlotScatterG("data", pacer::ToImPlotPoint, gps.data(),
-                             gps.size());
-        std::stringstream ss;
-        ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
-        ImPlot::PlotText(ss.str().data(), gps.back().lon, gps.back().lat);
+        auto getter = [](int index, void *data) {
+          auto &[gps, ld] = *reinterpret_cast<
+              std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> *>(
+              data);
+          return ld.ToImPlotPoint(gps[index]);
+        };
+
+        std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> data = {
+            gps, laps_display};
+
+        ImPlot::PlotScatterG("data", getter, &data, (int)gps.size());
+
+        if (!gps.empty()) {
+          std::stringstream ss;
+          ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
+          auto point = laps_display.ToImPlotPoint(gps.back());
+          ImPlot::PlotText(ss.str().data(), point[0], point[1]);
+        }
         ImPlot::EndPlot();
       }
     }
     ImGui::End();
 
-    // 2. Show a simple window that we create ourselves. We use a Begin/End
-    // pair to create a named window.
-    {
-      static float f = 0.0f;
-      static int counter = 0;
-
-      ImGui::Begin("Hello, world!"); // Create a window called "Hello, world!"
-                                     // and append into it.
-
-      ImGui::Text("This is some useful text."); // Display some text (you can
-                                                // use a format strings too)
-      ImGui::Checkbox("ImGui demo Window",
-                      &show_imgui_demo_window); // Edit bools storing our
-                                                // window open/close state
-      ImGui::Checkbox("ImPlot demo Window",
-                      &show_implot_demo_window); // Edit bools storing our
-                                                 // window open/close state
-      ImGui::Checkbox("Another Window", &show_another_window);
-
-      ImGui::SliderFloat("float", &f, 0.0f,
-                         1.0f); // Edit 1 float using a slider from 0.0f to 1.0f
-      ImGui::ColorEdit3(
-          "clear color",
-          (float *)&clear_color); // Edit 3 floats representing a color
-
-      if (ImGui::Button("Button")) // Buttons return true when clicked (most
-                                   // widgets return true when edited/activated)
-        counter++;
-      ImGui::SameLine();
-      ImGui::Text("counter = %d", counter);
-
-      ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-                  1000.0f / io.Framerate, io.Framerate);
-      ImGui::End();
-    }
+    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                1000.0f / io.Framerate, io.Framerate);
 
     if (ImGui::Begin("Telemetry data")) {
       auto [start, end] = m.CurrentTimeSpan();
