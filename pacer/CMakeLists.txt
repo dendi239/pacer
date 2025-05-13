@@ -1,4 +1,3 @@
-
 macro(add_pacer_library name)
     # Parse keyword arguments: SOURCES and HEADERS
     set(options)
@@ -68,8 +67,8 @@ macro(add_pacer_library name)
 
 endmacro()
 
-add_subdirectory(geometry)
-add_subdirectory(laps)
-add_subdirectory(laps-display)
 add_subdirectory(datatypes)
-add_subdirectory(movie-handler)
+add_subdirectory(geometry)
+add_subdirectory(gps-source)
+add_subdirectory(laps-display)
+add_subdirectory(laps)

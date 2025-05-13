@@ -63,11 +63,11 @@ public:
 /// TODO: Provide even more low-level access to underlying samples,
 ///       might be useful to keep buffer for data in some sort of iterator
 ///       with option to iterate over GPSSample-s on top of it.
-class MovieHandler : public GPSSource {
+class GPMFSource : public GPSSource {
 public:
-  explicit MovieHandler(size_t mp4handle);
-  explicit MovieHandler(const char *filename);
-  ~MovieHandler() noexcept;
+  explicit GPMFSource(size_t mp4handle);
+  explicit GPMFSource(const char *filename);
+  ~GPMFSource() noexcept;
 
   /// Main interface to take samples from current handler.
   ///

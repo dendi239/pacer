@@ -26,9 +26,9 @@
 
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
+#include <pacer/gps-source/gps-source.hpp>
 #include <pacer/laps-display/laps-display.hpp>
 #include <pacer/laps/laps.hpp>
-#include <pacer/movie-handler/movie-handler.hpp>
 
 #include <stdio.h>
 #include <strings.h>
@@ -58,7 +58,6 @@ static void glfw_error_callback(int error, const char *description) {
 }
 
 using pacer::GPSSample;
-using pacer::MovieHandler;
 
 // Main code
 int main(int, char **) {
@@ -150,16 +149,16 @@ int main(int, char **) {
       "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
   };
 
-  MovieHandler mm[] = {
-      MovieHandler(filenames[0]), MovieHandler(filenames[1]),
-      MovieHandler(filenames[2]), MovieHandler(filenames[3]),
-      MovieHandler(filenames[4]),
+  pacer::GPMFSource mm[] = {
+      pacer::GPMFSource(filenames[0]), pacer::GPMFSource(filenames[1]),
+      pacer::GPMFSource(filenames[2]), pacer::GPMFSource(filenames[3]),
+      pacer::GPMFSource(filenames[4]),
   };
   pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m13(&m12, &mm[2]),
       m14(&m13, &mm[3]), m(&m14, &mm[4]);
 
   // const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
-  // MovieHandler m(filename);
+  // pacer::GPMFSource m(filename);
 
   m.Seek(0);
   pacer::Laps laps;

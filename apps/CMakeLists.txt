@@ -2,7 +2,7 @@ add_executable(timeline timeline.cpp)
 target_link_libraries(timeline PRIVATE
     imgui::glfw3
     pacer::laps
-    pacer::movie-handler
+    pacer::gps-source
     pacer::laps-display
 )
 

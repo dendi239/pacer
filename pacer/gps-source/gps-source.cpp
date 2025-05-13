@@ -1,4 +1,4 @@
-#include "movie-handler.hpp"
+#include "gps-source.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -9,7 +9,7 @@
 
 namespace pacer {
 
-MovieHandler::MovieHandler(const char *filename)
+GPMFSource::GPMFSource(const char *filename)
     : mp4handle_(OpenMP4Source(const_cast<char *>(filename), MOV_GPMF_TRAK_TYPE,
                                MOV_GPMF_TRAK_SUBTYPE, 0)) {
   if (mp4handle_ == 0) {
@@ -18,15 +18,15 @@ MovieHandler::MovieHandler(const char *filename)
   }
 }
 
-MovieHandler::~MovieHandler() noexcept {
+GPMFSource::~GPMFSource() noexcept {
   if (mp4handle_) {
     CloseSource(mp4handle_);
   }
 }
 
-MovieHandler::MovieHandler(size_t mp4handle) : mp4handle_(mp4handle) {}
+GPMFSource::GPMFSource(size_t mp4handle) : mp4handle_(mp4handle) {}
 
-uint32_t MovieHandler::Seek(double target) {
+uint32_t GPMFSource::Seek(double target) {
   double in, out;
   uint32_t ret = GPMF_OK;
   do {
@@ -45,9 +45,9 @@ uint32_t MovieHandler::Seek(double target) {
   return ret;
 }
 
-void MovieHandler::Next() { ++index_; }
+void GPMFSource::Next() { ++index_; }
 
-bool MovieHandler::IsEnd() {
+bool GPMFSource::IsEnd() {
   double in, out;
   if (GetPayloadTime(mp4handle_, index_, &in, &out) != GPMF_OK) {
     return true;
@@ -55,21 +55,19 @@ bool MovieHandler::IsEnd() {
   return in + 1e-9 >= out;
 }
 
-std::pair<double, double> MovieHandler::CurrentTimeSpan() const {
+std::pair<double, double> GPMFSource::CurrentTimeSpan() const {
   double in, out;
   GetPayloadTime(mp4handle_, index_, &in, &out);
   return {in, out};
 }
 
-double MovieHandler::GetTotalDuration() const {
-  return GetDuration(mp4handle_);
-}
+double GPMFSource::GetTotalDuration() const { return GetDuration(mp4handle_); }
 
-uint32_t MovieHandler::Samples(void *data,
-                               void (*on_sample)(void * /*data*/,
-                                                 GPSSample /*sample*/,
-                                                 size_t /*current_index*/,
-                                                 size_t /*total_records*/)) {
+uint32_t GPMFSource::Samples(void *data,
+                             void (*on_sample)(void * /*data*/,
+                                               GPSSample /*sample*/,
+                                               size_t /*current_index*/,
+                                               size_t /*total_records*/)) {
   uint32_t payloadsize = GetPayloadSize(mp4handle_, index_);
   size_t payloadres = 0;
   payloadres = GetPayloadResource(mp4handle_, payloadres, payloadsize);
