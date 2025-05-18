@@ -4,11 +4,12 @@
 #include <pacer/geometry/geometry.hpp>
 
 void pacer::Laps::Update() {
-  if (start_line == dirty_start_line_ && sector_lines == dirty_sector_lines_)
+  if (sectors.start_line == dirty_start_line_ &&
+      sectors.sector_lines == dirty_sector_lines_)
     return;
 
-  dirty_start_line_ = start_line;
-  dirty_sector_lines_ = sector_lines;
+  dirty_start_line_ = sectors.start_line;
+  dirty_sector_lines_ = sectors.sector_lines;
 
   laps_.clear();
   sectors_.clear();
@@ -17,7 +18,8 @@ void pacer::Laps::Update() {
 
   int sector_index = -1;
   auto sector_line = [&] {
-    return sector_index == -1 ? start_line : sector_lines[sector_index];
+    return sector_index == -1 ? sectors.start_line
+                              : sectors.sector_lines[sector_index];
   };
 
   auto to_global = [&](Segment x) -> Segment {
@@ -30,7 +32,7 @@ void pacer::Laps::Update() {
   for (size_t i = 0; i < points_.size(); ++i) {
     PointInTime<GPSSample> current = points_[i];
 
-    auto lap_split = Split(to_global(start_line), previous, current);
+    auto lap_split = Split(to_global(sectors.start_line), previous, current);
     auto sector_split = Split(to_global(sector_line()), previous, current);
 
     previous = current;
@@ -61,7 +63,7 @@ void pacer::Laps::Update() {
       });
 
       sector_index += 1;
-      if (sector_index == sector_lines.size())
+      if (sector_index == sectors.sector_lines.size())
         sector_index = -1;
     }
   }
@@ -160,10 +162,15 @@ double pacer::Laps::StartTimestamp(size_t lap) const {
 }
 
 pacer::Lap pacer::Laps::GetLap(size_t lap) const {
+  if (lap >= laps_.size())
+    return {};
   std::vector<PointInTime<GPSSample>> points{laps_[lap].start};
   points.insert(points.end(), points_.begin() + laps_[lap].start_index,
                 points_.begin() + laps_[lap].finish_index);
-  return Lap{points};
+
+  auto l = Lap{.points = points};
+  l.FillDistances(cs_);
+  return l;
 }
 
 double pacer::Laps::SectorStartTimestamp(size_t sector) const {
@@ -178,7 +185,7 @@ double pacer::Laps::SectorTime(size_t sector) {
   return sectors_[sector].finish.time - sectors_[sector].start.time;
 }
 
-size_t pacer::Laps::SectorCount() const { return sector_lines.size(); }
+size_t pacer::Laps::SectorCount() const { return sectors.sector_lines.size(); }
 
 double pacer::Laps::LapEntrySpeed(size_t lap) const {
   return laps_[lap].start.point.full_speed;
@@ -186,7 +193,7 @@ double pacer::Laps::LapEntrySpeed(size_t lap) const {
 
 size_t pacer::Laps::LapsCount() const { return laps_.size(); }
 
-void pacer::Laps::ClearSectors() { sector_lines.clear(); }
+void pacer::Laps::ClearSectors() { sectors.sector_lines.clear(); }
 
 void pacer::Laps::AddPoint(GPSSample s, double t) {
   if (!points_.empty()) {
@@ -212,3 +219,64 @@ void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
   }
 }
 size_t pacer::Laps::RecordedSectors() const { return sectors_.size(); }
+
+size_t pacer::Lap::Count() const { return points.size(); }
+
+pacer::Lap pacer::Lap::Resample(const Lap &lap,
+                                const CoordinateSystem &cs) const {
+  Lap result{.width = lap.width,
+             .points = {lap.points.front()},
+             .cum_distances = cum_distances};
+
+  for (size_t i_timing_line = 0, i_lap = 1;
+       i_lap < lap.points.size() && i_timing_line < TimingLinesCount();
+       ++i_timing_line) {
+    auto s = Segment{
+        ToPoint(cs.Local(lap.points[i_lap - 1].point)),
+        ToPoint(cs.Local(lap.points[i_lap].point)),
+    };
+    auto to_local = [&](auto x) { return cs.Local(x); };
+    auto timing_line = TimingLine(i_timing_line, cs);
+
+    while (i_lap < lap.points.size()) {
+      auto split_point =
+          pacer::Split(timing_line, lap.points[i_lap - 1], lap.points[i_lap]);
+      if (split_point) {
+        result.points.push_back(*split_point);
+        break;
+      }
+
+      ++i_lap;
+    }
+  }
+
+  result.points.push_back(lap.points.back());
+  return result;
+}
+
+pacer::Segment pacer::Lap::TimingLine(size_t i,
+                                      const CoordinateSystem &cs) const {
+
+  i += 1;
+  Vec3f prev = cs.Local(points[i - 1].point), curr = cs.Local(points[i].point),
+        next = cs.Local(points[i + 1].point);
+
+  Vec3f dir = (next - prev);
+  dir /= std::sqrt(dir.Norm());
+  Vec3f norm = Vec3f{dir[1], -dir[0], 0};
+
+  return Segment{ToPoint(cs.Global(curr - norm * width)),
+                 ToPoint(cs.Global(curr + norm * width))};
+}
+
+size_t pacer::Lap::TimingLinesCount() const { return points.size() - 2; }
+void pacer::Lap::FillDistances(const CoordinateSystem &cs) {
+  cum_distances = std::vector<double>{0};
+  for (size_t i = 1; i < points.size(); ++i) {
+    cum_distances.push_back(cum_distances.back() +
+                            cs.Distance(points[i - 1].point, points[i].point));
+  }
+}
+double pacer::Lap::LapTime() const {
+  return points.back().time - points.front().time;
+}

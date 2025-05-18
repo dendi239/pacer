@@ -1,18 +1,20 @@
 #include "laps-display.hpp"
 
+#include <algorithm>
 #include <sstream>
+#include <unordered_map>
 
+#include "imgui.h"
+#include "implot.h"
 #include "implot_internal.h"
+
+#include <pacer/datatypes/datatypes.hpp>
 
 ImPlotPoint pacer::LapsDisplay::ToImPlotPoint(GPSSample s) const {
   auto p = cs.Local(s);
   return {p[0], p[1]};
 }
 
-ImPlotPoint StartGetter(int index, void *data) {
-  pacer::Laps *laps = reinterpret_cast<pacer::Laps *>(data);
-  return index ? laps->start_line.second : laps->start_line.first;
-}
 void pacer::LapsDisplay::DragTimingLine(Segment *s, const char *name,
                                         int drag_id) {
   auto get_point = [](int index, void *data) -> ImPlotPoint {
@@ -28,6 +30,7 @@ void pacer::LapsDisplay::DragTimingLine(Segment *s, const char *name,
   ImPlot::DragPoint(2 * drag_id + 2, &s->second.x, &s->second.y,
                     ImPlot::GetLastItemColor());
 }
+
 void pacer::LapsDisplay::DisplayMap() {
   if (bounds.first.x >= bounds.second.x) {
     bounds = laps.MinMax();
@@ -37,7 +40,7 @@ void pacer::LapsDisplay::DisplayMap() {
         .altitude = 0,
     });
     laps.SetCoordinateSystem(cs);
-    laps.start_line = laps.PickRandomStart();
+    laps.sectors.start_line = laps.PickRandomStart();
     auto min_ =
         cs.Local(GPSSample{.lon = bounds.first.x, .lat = bounds.first.y});
     auto max_ =
@@ -75,9 +78,9 @@ void pacer::LapsDisplay::DisplayMap() {
       },
       reinterpret_cast<void *>(this), (int)laps.PointCount());
 
-  DragTimingLine(&laps.start_line, "Start", 0);
+  DragTimingLine(&laps.sectors.start_line, "Start", 0);
   for (int i = 0; i < laps.SectorCount(); ++i) {
-    auto &s = laps.sector_lines[i];
+    auto &s = laps.sectors.sector_lines[i];
     std::stringstream ss;
     ss << "Sector " << i + 1;
     DragTimingLine(&s, ss.str().c_str(), i + 1);
@@ -102,7 +105,7 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
 }
 bool pacer::LapsDisplay::DisplayTable() {
   if (ImGui::Button("Add sector")) {
-    laps.sector_lines.push_back(laps.PickRandomStart());
+    laps.sectors.sector_lines.push_back(laps.PickRandomStart());
   }
   ImGui::SameLine();
   if (ImGui::Button("Reset sectors")) {
@@ -130,9 +133,15 @@ bool pacer::LapsDisplay::DisplayTable() {
 
   for (int row = 0, i_sector = 0; row < laps.LapsCount(); ++row) {
     ImGui::TableNextRow();
-
     ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%.3f", laps.StartTimestamp(row));
+
+    ImGui::Selectable(std::format("{}", row).c_str(), false, 0, ImVec2(100, 0));
+
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+      ImGui::SetDragDropPayload("MY_DND", &row, sizeof(int));
+      ImGui::Text("%.3f", laps.StartTimestamp(row));
+      ImGui::EndDragDropSource();
+    }
 
     ImGui::TableSetColumnIndex(1);
     ImGui::Text("%zu", laps.SampleCount(row));
@@ -161,4 +170,108 @@ bool pacer::LapsDisplay::DisplayTable() {
 
   ImGui::EndTable();
   return true;
+}
+ImPlotPoint SampleToPoint(int index, void *data) {
+  auto &s = *reinterpret_cast<pacer::DeltaLapsComparision *>(data);
+  auto p = s.cs.Local(s.reference_lap.points[index].point);
+  return {p[0], p[1]};
+}
+ImPlotPoint Vec3fToPoint(int index, void *data) {
+  auto s = reinterpret_cast<pacer::Vec3f *>(data)[index];
+  return {s[0], s[1]};
+}
+
+void pacer::DeltaLapsComparision::DrawSlider() {
+  ImGui::SliderFloat("Width", &reference_lap.width, 0, 10);
+}
+
+void pacer::DeltaLapsComparision::PlotSticks() {
+  for (size_t i = 1; i + 1 < reference_lap.Count(); ++i) {
+    Vec3f prev = cs.Local(reference_lap.points[i - 1].point),
+          curr = cs.Local(reference_lap.points[i].point),
+          next = cs.Local(reference_lap.points[i + 1].point);
+
+    Vec3f dir = (next - prev);
+    dir /= std::sqrt(dir.Norm());
+    Vec3f norm = Vec3f{dir[1], -dir[0], 0};
+    Vec3f line[2] = {curr - norm * reference_lap.width,
+                     curr + norm * reference_lap.width};
+    ImPlot::PlotLineG("", Vec3fToPoint, line, 2);
+  }
+}
+
+void pacer::DeltaLapsComparision::Display(const Laps &laps) {
+  if (reference_lap.points.size() < 1) {
+    return;
+  }
+
+  std::unordered_map<int, Lap> resampled_laps;
+  if (ImPlot::BeginSubplots("", 2, 1, ImVec2(-1, -1))) {
+    if (ImPlot::BeginPlot("Telemetry", ImVec2())) {
+      if (ImPlot::BeginDragDropTargetPlot()) {
+        if (const ImGuiPayload *payload =
+                ImGui::AcceptDragDropPayload("MY_DND")) {
+          int i = *(int *)payload->Data;
+          if (selected_laps.contains(i)) {
+            selected_laps.erase(i);
+          } else {
+            selected_laps.insert(i);
+          }
+        }
+        ImPlot::EndDragDropTarget();
+      }
+
+      for (auto lap_id : selected_laps) {
+        auto lap = reference_lap.Resample(laps.GetLap(lap_id), cs);
+        resampled_laps[lap_id] = lap;
+        auto data = std::pair{lap, lap_id};
+
+        ImPlot::PlotLineG(
+            std::format("lap {}", lap_id).c_str(),
+            [](int index, void *data) -> ImPlotPoint {
+              auto &[lap, lap_id] =
+                  *reinterpret_cast<std::pair<pacer::Lap, int> *>(data);
+              auto [gps, time] = lap.points[index];
+
+              return ImPlotPoint{lap.cum_distances[index],
+                                 lap.points[index].point.full_speed * 3.6};
+            },
+            (void *)&data, (int)lap.Count());
+      }
+      ImPlot::EndPlot();
+    }
+    if (ImPlot::BeginPlot("Delta", ImVec2())) {
+      if (!selected_laps.empty()) {
+        int best_lap_id = *std::min_element(
+            selected_laps.begin(), selected_laps.end(),
+            [&](int i, int j) { return laps.LapTime(i) < laps.LapTime(j); });
+
+        auto &best_lap = resampled_laps[best_lap_id];
+
+        for (int lap_id : selected_laps) {
+          auto &lap = resampled_laps[lap_id];
+          std::tuple<Lap &, Lap &> data{lap, best_lap};
+          ImPlot::PlotLineG(
+              std::format("lap {}", lap_id).c_str(),
+              [](int index, void *data) -> ImPlotPoint {
+                auto [lap, best_lap] = *(std::tuple<Lap &, Lap &> *)data;
+                if (lap.points.size() < index) {
+                  return {best_lap.cum_distances[index],
+                          lap.LapTime() - best_lap.LapTime()};
+                }
+
+                auto lap_time = lap.points[index].time - lap.points[0].time;
+                auto best_time =
+                    best_lap.points[index].time - best_lap.points[0].time;
+
+                return ImPlotPoint{best_lap.cum_distances[index],
+                                   lap_time - best_time};
+              },
+              &data, reference_lap.points.size());
+        }
+      }
+      ImPlot::EndPlot();
+    }
+  }
+  ImPlot::EndSubplots();
 }

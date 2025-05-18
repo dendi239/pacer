@@ -162,37 +162,39 @@ uint32_t GPMFSource::Samples(void *data,
           } r;
 
           for (i = 0; i < samples; i++) {
-            printf("  %c%c%c%c ", PRINTF_4CC(key));
+            // printf("  %c%c%c%c ", PRINTF_4CC(key));
 
             for (j = 0; j < elements; j++) {
               if (type == GPMF_TYPE_STRING_ASCII) {
 
-                printf("%c", rawdata[pos]);
+                // printf("%c", rawdata[pos]);
                 pos++;
                 ptr++;
               } else if (type_samples == 0) // no TYPE structure
               {
 
-                printf("%.3f%s, ", *ptr++, units[j % unit_samples]);
+                // printf("%.3f%s, ", *ptr++, units[j % unit_samples]);
+                ptr++;
               } else if (complextype[j] != 'F') {
                 r.values[j % unit_samples] = *ptr;
                 if ((j + 1) % unit_samples == 0) {
                   on_sample(data, r.gps, i, samples);
                 }
 
-                printf("%.3f%s, ", *ptr++, units[j % unit_samples]);
+                // printf("%.3f%s, ", *ptr++, units[j % unit_samples]);
+                ++ptr;
 
                 pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
               } else if (type_samples && complextype[j] == GPMF_TYPE_FOURCC) {
                 ptr++;
 
-                printf("%c%c%c%c, ", rawdata[pos], rawdata[pos + 1],
-                       rawdata[pos + 2], rawdata[pos + 3]);
+                // printf("%c%c%c%c, ", rawdata[pos], rawdata[pos + 1],
+                //        rawdata[pos + 2], rawdata[pos + 3]);
                 pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
               }
             }
 
-            printf("\n");
+            // printf("\n");
           }
         }
         free(tmpbuffer);

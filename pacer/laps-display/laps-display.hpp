@@ -1,3 +1,7 @@
+#pragma once
+
+#include <unordered_set>
+
 #include "implot.h"
 
 #include <pacer/laps/laps.hpp>
@@ -21,6 +25,18 @@ struct LapsDisplay {
   void DisplayLapTelemetry() const;
 
   bool DisplayTable();
+};
+
+struct DeltaLapsComparision {
+  Lap reference_lap;
+  CoordinateSystem cs;
+
+  void PlotSticks();
+  void DrawSlider();
+
+  std::unordered_set<int> selected_laps = {3, 10, 24};
+
+  void Display(const Laps &laps);
 };
 
 } // namespace pacer

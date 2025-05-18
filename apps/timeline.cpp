@@ -173,8 +173,9 @@ int main(int, char **) {
     });
   }
 
-  laps.start_line = laps.PickRandomStart();
+  laps.sectors.start_line = laps.PickRandomStart();
   auto laps_display = pacer::LapsDisplay{laps};
+  pacer::DeltaLapsComparision delta;
 
   m.Seek(0);
 
@@ -288,32 +289,6 @@ int main(int, char **) {
     }
     ImGui::End();
 
-    if (ImGui::Begin("Map")) {
-      if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1))) {
-        laps_display.DisplayMap();
-        auto getter = [](int index, void *data) {
-          auto &[gps, ld] = *reinterpret_cast<
-              std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> *>(
-              data);
-          return ld.ToImPlotPoint(gps[index]);
-        };
-
-        std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> data = {
-            gps, laps_display};
-
-        ImPlot::PlotScatterG("data", getter, &data, (int)gps.size());
-
-        if (!gps.empty()) {
-          std::stringstream ss;
-          ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
-          auto point = laps_display.ToImPlotPoint(gps.back());
-          ImPlot::PlotText(ss.str().data(), point[0], point[1]);
-        }
-        ImPlot::EndPlot();
-      }
-    }
-    ImGui::End();
-
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
                 1000.0f / io.Framerate, io.Framerate);
 
@@ -395,11 +370,54 @@ int main(int, char **) {
       }
     }
     ImGui::End();
+    delta.cs = laps_display.cs;
+    static int old_selected_lap = laps_display.selected_lap;
+    if (old_selected_lap != laps_display.selected_lap) {
+      float width = delta.reference_lap.width;
+      delta.reference_lap = laps.GetLap(laps_display.selected_lap);
+      delta.reference_lap.width = width;
+    }
+
+    if (ImGui::Begin("Map")) {
+      if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1))) {
+        laps_display.DisplayMap();
+        auto getter = [](int index, void *data) {
+          auto &[gps, ld] = *reinterpret_cast<
+              std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> *>(
+              data);
+          return ld.ToImPlotPoint(gps[index]);
+        };
+
+        std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> data = {
+            gps, laps_display};
+
+        ImPlot::PlotScatterG("data", getter, &data, (int)gps.size());
+
+        if (!gps.empty()) {
+          std::stringstream ss;
+          ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
+          auto point = laps_display.ToImPlotPoint(gps.back());
+          ImPlot::PlotText(ss.str().data(), point[0], point[1]);
+        }
+        delta.PlotSticks();
+        ImPlot::EndPlot();
+      }
+    }
+    ImGui::End();
 
     if (ImGui::Begin("Laps")) {
+      delta.DrawSlider();
+      ImGui::SameLine();
       laps_display.DisplayTable();
     }
     ImGui::End();
+
+    if (ImGui::Begin("Delta")) {
+      delta.Display(laps);
+    }
+    ImGui::End();
+
+    // single_lap.Display();
 
     if (ImGui::Begin("Lap Telemetry")) {
       laps_display.DisplayLapTelemetry();

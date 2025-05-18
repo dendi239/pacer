@@ -8,7 +8,25 @@
 namespace pacer {
 
 struct Lap {
+  float width;
+
   std::vector<PointInTime<GPSSample>> points;
+  std::vector<double> cum_distances;
+
+  void FillDistances(const CoordinateSystem &cs);
+
+  double LapTime() const;
+
+  size_t Count() const;
+  Lap Resample(const Lap &lap, const CoordinateSystem &cs) const;
+
+  size_t TimingLinesCount() const;
+  Segment TimingLine(size_t index, const CoordinateSystem &cs) const;
+};
+
+struct Sectors {
+  Segment start_line;
+  std::vector<Segment> sector_lines;
 };
 
 struct Laps {
@@ -29,7 +47,7 @@ struct Laps {
 
   //-------------------------------- LAPS -----------------------------------//
 
-  Segment start_line;
+  Sectors sectors;
 
   size_t LapsCount() const;
   double LapEntrySpeed(size_t lap) const;
@@ -44,8 +62,6 @@ struct Laps {
   Lap GetLap(size_t lap) const;
 
   //------------------------------- SECTORS ---------------------------------//
-
-  std::vector<Segment> sector_lines;
 
   size_t SectorCount() const;
   size_t RecordedSectors() const;
