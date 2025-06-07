@@ -7,3 +7,5 @@ target_link_libraries(timeline PRIVATE
 )
 
 add_executable(destructor_test destructor_test.cpp)
+
+add_executable(datparser datparser.c)
