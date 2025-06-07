@@ -34,7 +34,7 @@ struct DeltaLapsComparision {
   void PlotSticks();
   void DrawSlider();
 
-  std::unordered_set<int> selected_laps = {3, 10, 24};
+  std::unordered_set<int> selected_laps = {}; //{19, 24, 28, 35, 36};
 
   void Display(const Laps &laps);
 };
