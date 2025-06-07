@@ -10,6 +10,7 @@ I believe, main dependencies are already present in the project as git submodule
 On top of that you'd need some sort of C++ compiler, `cmake`, `libglfw` (for GUI stuff), all of that should be installable from `brew` or `apt` (I ran this thing on Windows under WSL 2 -- it has X-Forwarding builtin).
 
 Bunch of views to take a look at:
+
 - gps map;
 - timeline to take a deeper look at data;
 - table with entire payload;
@@ -19,6 +20,7 @@ Bunch of views to take a look at:
 ## components
 
 Some components:
+
 - `apps/timeline.cpp`: main app: consists of bunch of different views on top of parsed data;
 - `examples/`: bunch of examples of usage of 3rd party dependencies (e.g. implot, imgui, gpmf-parser);
 - `libs/`: parser for telemetry data, laps mangling, some geometry utilities.
@@ -28,11 +30,11 @@ Some components:
 - actual video-feed inside `timeline` app;
 - lap segmentation, comparision between laps with delta;
 - more on-line approach, e.g. to use live in session for comments like:
-    - too much wheelspin on exit;
-    - too little braking on entry;
-    - shorter line is better;
-    - keep minimum speed higher;
-    - etc.
+  - too much wheelspin on exit;
+  - too little braking on entry;
+  - shorter line is better;
+  - keep minimum speed higher;
+  - etc.
 - integration with 3rd party gps data, e.g. from sampled file, consider building ios app for capturing;
 - nanobind-based python bindings to rapidly experiment in python (I've been putting it off due to shitty code);
 - clean up the code (lmao).
@@ -42,4 +44,4 @@ Some components:
 It's ain't much, but it's honest work.
 
 pacer © 2025 by Denys Smirnov is licensed under CC BY-NC-SA 4.0.
-To view a copy of this license, visit https://creativecommons.org/licenses/by-nc-sa/4.0/
+To view a copy of this license, visit <https://creativecommons.org/licenses/by-nc-sa/4.0/>
