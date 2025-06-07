@@ -14,6 +14,7 @@
 // - Introduction, links and more at the top of imgui.cpp
 
 #include <cstdio>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
@@ -32,6 +33,7 @@
 
 #include <stdio.h>
 #include <strings.h>
+#include <unordered_map>
 #include <vector>
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
@@ -97,7 +99,7 @@ int main(int, char **) {
 
   // Create window with graphics context
   GLFWwindow *window = glfwCreateWindow(
-      1280, 720, "Dear ImGui & ImPlot GLFW+OpenGL3 example", nullptr, nullptr);
+      1440, 900, "Dear ImGui & ImPlot GLFW+OpenGL3 example", nullptr, nullptr);
   if (window == nullptr)
     return 1;
 
@@ -142,20 +144,27 @@ int main(int, char **) {
 #endif
 
   const char *filenames[] = {
-      "/Users/denys/Documents/gokarting-ui/GH010219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH020219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH030219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH040219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH010219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH020219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH030219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH040219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
+      // "/Users/denys/Downloads/GX010079.MP4",
+      // "/Users/denys/Downloads/GX020079.MP4",
+      // "/Users/denys/Downloads/GX030079.MP4",
+      "/Users/denys/Pictures/GH010251.MP4",
+      "/Users/denys/Pictures/GH020251.MP4",
+      "/Users/denys/Pictures/GH030251.MP4",
   };
 
   pacer::GPMFSource mm[] = {
       pacer::GPMFSource(filenames[0]), pacer::GPMFSource(filenames[1]),
-      pacer::GPMFSource(filenames[2]), pacer::GPMFSource(filenames[3]),
-      pacer::GPMFSource(filenames[4]),
+      pacer::GPMFSource(filenames[2]),
+      // pacer::GPMFSource(filenames[3]),
+      // pacer::GPMFSource(filenames[4]),
   };
-  pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m13(&m12, &mm[2]),
-      m14(&m13, &mm[3]), m(&m14, &mm[4]);
+  pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m(&m12, &mm[2]);
+  // m14(&m13, &mm[3]), m(&m14, &mm[4]);
 
   // const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
   // pacer::GPMFSource m(filename);
@@ -163,14 +172,76 @@ int main(int, char **) {
   m.Seek(0);
   pacer::Laps laps;
 
+  pacer::CoordinateSystem cs;
+  std::unordered_map<int, int> counts(20);
+
+  std::vector<std::tuple<GPSSample, double, double>> samples;
+
   for (m.Seek(0); !m.IsEnd(); m.Next()) {
     auto [start, end] = m.CurrentTimeSpan();
     m.pacer::GPSSource::Samples([&](GPSSample s, size_t current, size_t total) {
+      static int counter = 0;
+      counter++;
+      if (laps.PointCount() == 1) {
+        cs = pacer::CoordinateSystem(laps.GetPoint(0).point);
+      }
+      if (current == 0)
+        counts[total] += 1;
+      if (total) {
+        if (current == 0) {
+          std::cerr << "sample #" << std::setw(5) << counter << " dist:";
+        }
+
+        if (laps.PointCount()) {
+          std::cerr << " " << std::fixed << std::setprecision(3)
+                    << cs.Distance(laps.GetPoint(laps.PointCount() - 1).point,
+                                   s);
+        }
+      }
       if (s.full_speed > 1e-6) {
-        auto t = start + current * (end - start) / total;
-        laps.AddPoint(s, t);
+        samples.emplace_back(s, start, end);
       }
     });
+  }
+
+  {
+    double start = std::get<1>(samples.front()),
+           end = std::get<2>(samples.back());
+
+    size_t total_samples = samples.size();
+    auto cs = pacer::CoordinateSystem(std::get<0>(samples.back()));
+
+    auto likely_skipped = [&](size_t i) {
+      if (i == 0 || i + 1 == samples.size()) {
+        return false;
+      }
+      auto [prev, _1, _2] = samples[i - 1];
+      auto [curr, _3, _4] = samples[i];
+      auto [next, _5, _6] = samples[i + 1];
+
+      auto prev_dist = cs.Distance(prev, curr);
+      auto next_dist = cs.Distance(curr, next);
+
+      return prev_dist > 1.9 * next_dist;
+    };
+
+    for (size_t i = 1; i + 1 < samples.size(); ++i) {
+      total_samples += likely_skipped(i);
+    }
+
+    auto frequency = total_samples / (end - start);
+    auto dt = (end - start) / total_samples;
+    double current = 0;
+
+    for (size_t i = 0; i < samples.size(); ++i) {
+      current += dt * likely_skipped(i);
+      laps.AddPoint(std::get<0>(samples[i]), current);
+      current += dt;
+    }
+  }
+
+  for (auto [freq, count] : counts) {
+    std::cout << freq << " " << count << std::endl;
   }
 
   laps.sectors.start_line = laps.PickRandomStart();
@@ -200,11 +271,11 @@ int main(int, char **) {
   // - If no fonts are loaded, dear imgui will use the default font. You can
   // also load multiple fonts and use ImGui::PushFont()/PopFont() to select
   // them.
-  // - AddFontFromFileTTF() will return the ImFont* so you can store it if you
-  // need to select the font among multiple.
+  // - AddFontFromFileTTF() will return the ImFont* so you can store it if
+  // you need to select the font among multiple.
   // - If the file cannot be loaded, the function will return a nullptr.
-  // Please handle those errors in your application (e.g. use an assertion, or
-  // display an error and quit).
+  // Please handle those errors in your application (e.g. use an assertion,
+  // or display an error and quit).
   // - The fonts will be rasterized at a given size (w/ oversampling) and
   // stored into a texture when calling
   // ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame
@@ -212,18 +283,19 @@ int main(int, char **) {
   // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use
   // Freetype for higher quality font rendering.
   // - Read 'docs/FONTS.md' for more instructions and details.
-  // - Remember that in C/C++ if you want to include a backslash \ in a string
-  // literal you need to write a double backslash \\ !
-  // - Our Emscripten build process allows embedding fonts to be accessible at
-  // runtime from the "fonts/" folder. See Makefile.emscripten for details.
-  // io.Fonts->AddFontDefault();
+  // - Remember that in C/C++ if you want to include a backslash \ in a
+  // string literal you need to write a double backslash \\ !
+  // - Our Emscripten build process allows embedding fonts to be accessible
+  // at runtime from the "fonts/" folder. See Makefile.emscripten for
+  // details. io.Fonts->AddFontDefault();
   // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
   // io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
   // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
   // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
   // ImFont* font =
   // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f,
-  // nullptr, io.Fonts->GetGlyphRangesJapanese()); IM_ASSERT(font != nullptr);
+  // nullptr, io.Fonts->GetGlyphRangesJapanese()); IM_ASSERT(font !=
+  // nullptr);
 
   // Our state
   bool show_imgui_demo_window = true;
@@ -233,9 +305,10 @@ int main(int, char **) {
 
   // Main loop
 #ifdef __EMSCRIPTEN__
-  // For an Emscripten build we are disabling file-system access, so let's not
-  // attempt to do a fopen() of the imgui.ini file. You may manually call
-  // LoadIniSettingsFromMemory() to load settings from your own storage.
+  // For an Emscripten build we are disabling file-system access, so let's
+  // not attempt to do a fopen() of the imgui.ini file. You may manually
+  // call LoadIniSettingsFromMemory() to load settings from your own
+  // storage.
   io.IniFilename = nullptr;
   EMSCRIPTEN_MAINLOOP_BEGIN
 #else
@@ -245,12 +318,13 @@ int main(int, char **) {
     // Poll and handle events (inputs, window resize, etc.)
     // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to
     // tell if dear imgui wants to use your inputs.
-    // - When io.WantCaptureMouse is true, do not dispatch mouse input data to
-    // your main application, or clear/overwrite your copy of the mouse data.
+    // - When io.WantCaptureMouse is true, do not dispatch mouse input data
+    // to your main application, or clear/overwrite your copy of the mouse
+    // data.
     // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input
     // data to your main application, or clear/overwrite your copy of the
-    // keyboard data. Generally you may always pass all inputs to dear imgui,
-    // and hide them from your application based on those two flags.
+    // keyboard data. Generally you may always pass all inputs to dear
+    // imgui, and hide them from your application based on those two flags.
     glfwPollEvents();
     if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0) {
       ImGui_ImplGlfw_Sleep(10);
@@ -348,7 +422,8 @@ int main(int, char **) {
       if (ImGui::BeginTable("table1", 5, flags)) {
         // Display headers so we can inspect their interaction with borders
         // (Headers are not the main purpose of this section of the demo, so
-        // we are not elaborating on them now. See other sections for details)
+        // we are not elaborating on them now. See other sections for
+        // details)
         if (display_headers) {
           ImGui::TableSetupColumn("Latitude");
           ImGui::TableSetupColumn("Longitude");
@@ -379,7 +454,7 @@ int main(int, char **) {
     }
 
     if (ImGui::Begin("Map")) {
-      if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1))) {
+      if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1)), ImPlotFlags_Equal) {
         laps_display.DisplayMap();
         auto getter = [](int index, void *data) {
           auto &[gps, ld] = *reinterpret_cast<
