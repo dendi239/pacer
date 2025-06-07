@@ -50,3 +50,9 @@ add_library(gpmf
 target_include_directories(gpmf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/gpmf-parser)
 set_property(TARGET gpmf PROPERTY FOLDER "3rdparty")
 add_library(gpmf::gpmf ALIAS gpmf)
+
+###############################################################################
+#                                  nanobind                                   #
+###############################################################################
+
+add_subdirectory(nanobind)

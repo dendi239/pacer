@@ -7,3 +7,6 @@
 [submodule "3rdparty/gpmf-parser"]
 	path = 3rdparty/gpmf-parser
 	url = git@github.com:gopro/gpmf-parser.git
+[submodule "3rdparty/nanobind"]
+	path = 3rdparty/nanobind
+	url = https://github.com/wjakob/nanobind
