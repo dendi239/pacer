@@ -49,26 +49,27 @@ void pacer::LapsDisplay::DisplayMap() {
 
     // ImPlot::SetupAxisLimits(ImAxis_X1, min_[0], max_[0]);
     // ImPlot::SetupAxisLimits(ImAxis_Y1, min_[1], max_[1]);
+
+    auto gp = ImPlot::GetCurrentContext();
+
+    auto plot_size = gp->CurrentPlot->PlotRect.GetSize();
+
+    auto x_width = std::max(bounds.second.x - bounds.first.x,
+                            (bounds.second.y - bounds.first.y) * plot_size.x /
+                                plot_size.y);
+    auto y_width = std::max(bounds.second.y - bounds.first.y,
+
+                            (bounds.second.x - bounds.first.x) * plot_size.y /
+                                plot_size.x);
+
+    ImPlot::SetupAxisLimits(
+        ImAxis_X1, (bounds.first.x + bounds.second.x) / 2 - x_width / 2,
+        (bounds.first.x + bounds.second.x) / 2 + x_width / 2, ImPlotCond_Once);
+
+    ImPlot::SetupAxisLimits(
+        ImAxis_Y1, (bounds.first.y + bounds.second.y) / 2 - y_width / 2,
+        (bounds.first.y + bounds.second.y) / 2 + y_width / 2, ImPlotCond_Once);
   }
-  auto gp = ImPlot::GetCurrentContext();
-
-  auto plot_size = gp->CurrentPlot->PlotRect.GetSize();
-
-  auto x_width =
-      std::max(bounds.second.x - bounds.first.x,
-               (bounds.second.y - bounds.first.y) * plot_size.x / plot_size.y);
-  auto y_width =
-      std::max(bounds.second.y - bounds.first.y,
-
-               (bounds.second.x - bounds.first.x) * plot_size.y / plot_size.x);
-
-  ImPlot::SetupAxisLimits(
-      ImAxis_X1, (bounds.first.x + bounds.second.x) / 2 - x_width / 2,
-      (bounds.first.x + bounds.second.x) / 2 + x_width / 2, ImPlotCond_Always);
-
-  ImPlot::SetupAxisLimits(
-      ImAxis_Y1, (bounds.first.y + bounds.second.y) / 2 - y_width / 2,
-      (bounds.first.y + bounds.second.y) / 2 + y_width / 2, ImPlotCond_Always);
 
   ImPlot::PlotLineG(
       "trace",
@@ -95,8 +96,20 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
           auto &ld = *reinterpret_cast<LapsDisplay *>(data);
           auto [gps, time] = ld.laps.At(ld.selected_lap, index);
 
-          return ImPlotPoint{ld.laps.Distance(ld.selected_lap, index),
-                             ld.laps.Speed(ld.selected_lap, index) * 3.6};
+          return ImPlotPoint{
+              (double)index, // ld.laps.Distance(ld.selected_lap, index),
+              ld.laps.Speed(ld.selected_lap, index) * 3.6};
+        },
+        (void *)this, (int)laps.SampleCount(selected_lap));
+    ImPlot::PlotScatterG(
+        "speed trace",
+        [](int index, void *data) {
+          auto &ld = *reinterpret_cast<LapsDisplay *>(data);
+          auto [gps, time] = ld.laps.At(ld.selected_lap, index);
+
+          return ImPlotPoint{
+              (double)index, // ld.laps.Distance(ld.selected_lap, index),
+              ld.laps.Speed(ld.selected_lap, index) * 3.6};
         },
         (void *)this, (int)laps.SampleCount(selected_lap));
 
@@ -200,14 +213,17 @@ void pacer::DeltaLapsComparision::PlotSticks() {
   }
 }
 
+// std::optional<float>
 void pacer::DeltaLapsComparision::Display(const Laps &laps) {
   if (reference_lap.points.size() < 1) {
     return;
   }
 
   std::unordered_map<int, Lap> resampled_laps;
-  if (ImPlot::BeginSubplots("", 2, 1, ImVec2(-1, -1))) {
+  if (ImPlot::BeginSubplots("", 2, 1, ImVec2(-1, -1),
+                            ImPlotSubplotFlags_LinkAllX)) {
     if (ImPlot::BeginPlot("Telemetry", ImVec2())) {
+      ImPlot::SetupAxis(ImAxis_X1, "", ImPlotAxisFlags_NoTickLabels);
       if (ImPlot::BeginDragDropTargetPlot()) {
         if (const ImGuiPayload *payload =
                 ImGui::AcceptDragDropPayload("MY_DND")) {
@@ -240,7 +256,7 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
       }
       ImPlot::EndPlot();
     }
-    if (ImPlot::BeginPlot("Delta", ImVec2())) {
+    if (ImPlot::BeginPlot("Delta", ImVec2(), ImPlotFlags_NoTitle)) {
       if (!selected_laps.empty()) {
         int best_lap_id = *std::min_element(
             selected_laps.begin(), selected_laps.end(),
@@ -255,7 +271,8 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
               std::format("lap {}", lap_id).c_str(),
               [](int index, void *data) -> ImPlotPoint {
                 auto [lap, best_lap] = *(std::tuple<Lap &, Lap &> *)data;
-                if (lap.points.size() < index) {
+                if (lap.points.size() <= index ||
+                    best_lap.points.size() <= index) {
                   return {best_lap.cum_distances[index],
                           lap.LapTime() - best_lap.LapTime()};
                 }
@@ -263,6 +280,8 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
                 auto lap_time = lap.points[index].time - lap.points[0].time;
                 auto best_time =
                     best_lap.points[index].time - best_lap.points[0].time;
+                assert(best_time < 1000 && best_time >= 0);
+                assert(lap_time < 1000 && lap_time >= 0);
 
                 return ImPlotPoint{best_lap.cum_distances[index],
                                    lap_time - best_time};
