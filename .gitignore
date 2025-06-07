@@ -3,3 +3,7 @@
 build/
 xcode-build/
 *.ini
+
+# pixi environments
+.pixi
+*.egg-info
