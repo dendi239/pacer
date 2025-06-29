@@ -285,3 +285,7 @@ void pacer::Lap::FillDistances(const CoordinateSystem &cs) {
 double pacer::Lap::LapTime() const {
   return points.back().time - points.front().time;
 }
+void pacer::Laps::ClearPoints() {
+  points_.clear();
+  cum_point_dist_.clear();
+}

@@ -9,7 +9,7 @@
 namespace pacer {
 
 struct LapsDisplay {
-  Laps &laps;
+  Laps *laps;
   int selected_lap = -1;
 
   CoordinateSystem cs;

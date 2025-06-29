@@ -61,6 +61,160 @@ static void glfw_error_callback(int error, const char *description) {
 
 using pacer::GPSSample;
 
+void ReadInput(pacer::Laps *plaps) {
+  const char *filenames[] = {
+      // "/Users/denys/Documents/gokarting-ui/GH010219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH020219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH030219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH040219.MP4",
+      // "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
+      // "/Users/denys/Downloads/GX010079.MP4",
+      // "/Users/denys/Downloads/GX020079.MP4",
+      // "/Users/denys/Downloads/GX030079.MP4",
+      "/Users/denys/Pictures/GH010251.MP4",
+      "/Users/denys/Pictures/GH020251.MP4",
+      "/Users/denys/Pictures/GH030251.MP4",
+  };
+
+  pacer::GPMFSource mm[] = {
+      pacer::GPMFSource(filenames[0]), pacer::GPMFSource(filenames[1]),
+      pacer::GPMFSource(filenames[2]),
+      // pacer::GPMFSource(filenames[3]),
+      // pacer::GPMFSource(filenames[4]),
+  };
+  pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m(&m12, &mm[2]);
+  // m14(&m13, &mm[3]), m(&m14, &mm[4]);
+
+  // const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
+  // pacer::GPMFSource m(filename);
+
+  m.Seek(0);
+
+  auto &laps = *plaps;
+
+  pacer::CoordinateSystem cs;
+  std::unordered_map<int, int> counts(20);
+
+  std::vector<pacer::PointInTime<GPSSample>> samples;
+
+  for (m.Seek(0); !m.IsEnd(); m.Next()) {
+    auto [start, end] = m.CurrentTimeSpan();
+    m.pacer::RawGPSSource::Samples(
+        [&](GPSSample s, size_t current, size_t total) {
+          if (s.full_speed > 1e-6) {
+            laps.AddPoint(s, start + (end - start) / total * current);
+          }
+        });
+  }
+}
+
+void ReadInputDat(pacer::Laps *plaps) {
+  pacer::ReadDatFile(
+      "/Users/denys/Downloads/1749283873879948155.dat",
+      [&](pacer::GPSSample sample, double time) {
+        plaps->AddPoint(sample, time);
+        std::cerr << "Added sample: " << sample << " at time: " << time
+                  << std::endl;
+      },
+      pacer::DatVersion::WITH_TIMESTAMP);
+}
+
+void DisplayTelemetry(pacer::RawGPSSource &m, std::vector<GPSSample> &gps,
+                      float &current, float duration) {
+  if (ImGui::Begin("timeline")) {
+    ImGui::Text("Duration: %.2f", duration);
+    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() - 80);
+    if (ImGui::SliderFloat("Time", &current, 0, duration))
+      m.Seek(current);
+    ImGui::SameLine();
+    if (ImGui::Button(">"))
+      m.Next();
+    m.pacer::RawGPSSource::Samples(
+        [&](auto s, size_t, size_t) { gps.push_back(s); });
+  }
+  ImGui::End();
+
+  if (ImGui::Begin("Telemetry data")) {
+    auto [start, end] = m.CurrentTimeSpan();
+    ImGui::Text("Current time: %.3f %.3f", start, end);
+
+    // Expose a few Borders related flags interactively
+    enum ContentsType { CT_Text, CT_FillButton };
+    static ImGuiTableFlags flags =
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg;
+    static bool display_headers = false;
+    static int contents_type = CT_Text;
+
+    ImGui::CheckboxFlags("ImGuiTableFlags_RowBg", &flags,
+                         ImGuiTableFlags_RowBg);
+    ImGui::CheckboxFlags("ImGuiTableFlags_Borders", &flags,
+                         ImGuiTableFlags_Borders);
+    // ImGui::SameLine();
+    ImGui::Indent();
+
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersH", &flags,
+                         ImGuiTableFlags_BordersH);
+    ImGui::Indent();
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersOuterH", &flags,
+                         ImGuiTableFlags_BordersOuterH);
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersInnerH", &flags,
+                         ImGuiTableFlags_BordersInnerH);
+    ImGui::Unindent();
+
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersV", &flags,
+                         ImGuiTableFlags_BordersV);
+    ImGui::Indent();
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersOuterV", &flags,
+                         ImGuiTableFlags_BordersOuterV);
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersInnerV", &flags,
+                         ImGuiTableFlags_BordersInnerV);
+    ImGui::Unindent();
+
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersOuter", &flags,
+                         ImGuiTableFlags_BordersOuter);
+    ImGui::CheckboxFlags("ImGuiTableFlags_BordersInner", &flags,
+                         ImGuiTableFlags_BordersInner);
+    ImGui::Unindent();
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Cell contents:");
+    ImGui::SameLine();
+    ImGui::RadioButton("Text", &contents_type, CT_Text);
+    ImGui::SameLine();
+    ImGui::RadioButton("FillButton", &contents_type, CT_FillButton);
+    ImGui::Checkbox("Display headers", &display_headers);
+    ImGui::CheckboxFlags("ImGuiTableFlags_NoBordersInBody", &flags,
+                         ImGuiTableFlags_NoBordersInBody);
+    // ImGui::SameLine();
+
+    if (ImGui::BeginTable("table1", 5, flags)) {
+      // Display headers so we can inspect their interaction with borders
+      // (Headers are not the main purpose of this section of the demo, so
+      // we are not elaborating on them now. See other sections for
+      // details)
+      if (display_headers) {
+        ImGui::TableSetupColumn("Latitude");
+        ImGui::TableSetupColumn("Longitude");
+        ImGui::TableSetupColumn("Altitude");
+        ImGui::TableSetupColumn("Ground Speed");
+        ImGui::TableSetupColumn("Full Speed");
+        ImGui::TableHeadersRow();
+      }
+
+      for (int row = 0; row < gps.size(); row++) {
+        ImGui::TableNextRow();
+        for (int column = 0; column < 5; column++) {
+          ImGui::TableSetColumnIndex(column);
+          ImGui::Text("%.2f", reinterpret_cast<double *>(&gps[row])[column] *
+                                  (column > 2 ? 3.6 : 1.0));
+        }
+      }
+      ImGui::EndTable();
+    }
+  }
+  ImGui::End();
+}
+
 // Main code
 int main(int, char **) {
   glfwSetErrorCallback(glfw_error_callback);
@@ -143,114 +297,18 @@ int main(int, char **) {
   //         1.0f);
 #endif
 
-  const char *filenames[] = {
-      // "/Users/denys/Documents/gokarting-ui/GH010219.MP4",
-      // "/Users/denys/Documents/gokarting-ui/GH020219.MP4",
-      // "/Users/denys/Documents/gokarting-ui/GH030219.MP4",
-      // "/Users/denys/Documents/gokarting-ui/GH040219.MP4",
-      // "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
-      // "/Users/denys/Downloads/GX010079.MP4",
-      // "/Users/denys/Downloads/GX020079.MP4",
-      // "/Users/denys/Downloads/GX030079.MP4",
-      "/Users/denys/Pictures/GH010251.MP4",
-      "/Users/denys/Pictures/GH020251.MP4",
-      "/Users/denys/Pictures/GH030251.MP4",
-  };
+  pacer::Laps full_laps;
+  ReadInput(&full_laps);
 
-  pacer::GPMFSource mm[] = {
-      pacer::GPMFSource(filenames[0]), pacer::GPMFSource(filenames[1]),
-      pacer::GPMFSource(filenames[2]),
-      // pacer::GPMFSource(filenames[3]),
-      // pacer::GPMFSource(filenames[4]),
-  };
-  pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m(&m12, &mm[2]);
-  // m14(&m13, &mm[3]), m(&m14, &mm[4]);
+  full_laps.sectors.start_line = full_laps.PickRandomStart();
+  auto laps = full_laps;
 
-  // const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
-  // pacer::GPMFSource m(filename);
-
-  m.Seek(0);
-  pacer::Laps laps;
-
-  pacer::CoordinateSystem cs;
-  std::unordered_map<int, int> counts(20);
-
-  std::vector<std::tuple<GPSSample, double, double>> samples;
-
-  for (m.Seek(0); !m.IsEnd(); m.Next()) {
-    auto [start, end] = m.CurrentTimeSpan();
-    m.pacer::GPSSource::Samples([&](GPSSample s, size_t current, size_t total) {
-      static int counter = 0;
-      counter++;
-      if (laps.PointCount() == 1) {
-        cs = pacer::CoordinateSystem(laps.GetPoint(0).point);
-      }
-      if (current == 0)
-        counts[total] += 1;
-      if (total) {
-        if (current == 0) {
-          std::cerr << "sample #" << std::setw(5) << counter << " dist:";
-        }
-
-        if (laps.PointCount()) {
-          std::cerr << " " << std::fixed << std::setprecision(3)
-                    << cs.Distance(laps.GetPoint(laps.PointCount() - 1).point,
-                                   s);
-        }
-      }
-      if (s.full_speed > 1e-6) {
-        samples.emplace_back(s, start, end);
-      }
-    });
-  }
-
-  {
-    double start = std::get<1>(samples.front()),
-           end = std::get<2>(samples.back());
-
-    size_t total_samples = samples.size();
-    auto cs = pacer::CoordinateSystem(std::get<0>(samples.back()));
-
-    auto likely_skipped = [&](size_t i) {
-      if (i == 0 || i + 1 == samples.size()) {
-        return false;
-      }
-      auto [prev, _1, _2] = samples[i - 1];
-      auto [curr, _3, _4] = samples[i];
-      auto [next, _5, _6] = samples[i + 1];
-
-      auto prev_dist = cs.Distance(prev, curr);
-      auto next_dist = cs.Distance(curr, next);
-
-      return prev_dist > 1.9 * next_dist;
-    };
-
-    for (size_t i = 1; i + 1 < samples.size(); ++i) {
-      total_samples += likely_skipped(i);
-    }
-
-    auto frequency = total_samples / (end - start);
-    auto dt = (end - start) / total_samples;
-    double current = 0;
-
-    for (size_t i = 0; i < samples.size(); ++i) {
-      current += dt * likely_skipped(i);
-      laps.AddPoint(std::get<0>(samples[i]), current);
-      current += dt;
-    }
-  }
-
-  for (auto [freq, count] : counts) {
-    std::cout << freq << " " << count << std::endl;
-  }
-
-  laps.sectors.start_line = laps.PickRandomStart();
-  auto laps_display = pacer::LapsDisplay{laps};
+  auto laps_display = pacer::LapsDisplay{&laps};
   pacer::DeltaLapsComparision delta;
 
-  m.Seek(0);
-
-  float duration = m.GetTotalDuration(), current = 0;
+  float duration =
+            laps.GetPoint(laps.PointCount() - 1).time - laps.GetPoint(0).time,
+        current = 0;
 
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
@@ -350,101 +408,25 @@ int main(int, char **) {
     std::vector<double> x, y;
     std::vector<GPSSample> gps;
 
-    if (ImGui::Begin("timeline")) {
-      ImGui::Text("Duration: %.2f", duration);
-      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() - 80);
-      if (ImGui::SliderFloat("Time", &current, 0, duration))
-        m.Seek(current);
-      ImGui::SameLine();
-      if (ImGui::Button(">"))
-        m.Next();
-      m.pacer::GPSSource::Samples(
-          [&](auto s, size_t, size_t) { gps.push_back(s); });
+    static float start = 0, end = full_laps.PointCount();
+    if (ImGui::Begin("Data Subset")) {
+      ImGui::Text("Select data subset to display on the map");
+      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2);
+      if (ImGui::SliderFloat("Start", &start, 0, end) ||
+          (ImGui::SameLine(),
+           ImGui::SliderFloat("End", &end, start, full_laps.PointCount()))) {
+        laps.ClearPoints();
+        for (size_t i = start; i < end; ++i) {
+          auto [gps, time] = full_laps.GetPoint(i);
+          laps.AddPoint(gps, time);
+        }
+      }
     }
     ImGui::End();
 
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
                 1000.0f / io.Framerate, io.Framerate);
 
-    if (ImGui::Begin("Telemetry data")) {
-      auto [start, end] = m.CurrentTimeSpan();
-      ImGui::Text("Current time: %.3f %.3f", start, end);
-
-      // Expose a few Borders related flags interactively
-      enum ContentsType { CT_Text, CT_FillButton };
-      static ImGuiTableFlags flags =
-          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg;
-      static bool display_headers = false;
-      static int contents_type = CT_Text;
-
-      ImGui::CheckboxFlags("ImGuiTableFlags_RowBg", &flags,
-                           ImGuiTableFlags_RowBg);
-      ImGui::CheckboxFlags("ImGuiTableFlags_Borders", &flags,
-                           ImGuiTableFlags_Borders);
-      // ImGui::SameLine();
-      ImGui::Indent();
-
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersH", &flags,
-                           ImGuiTableFlags_BordersH);
-      ImGui::Indent();
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersOuterH", &flags,
-                           ImGuiTableFlags_BordersOuterH);
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersInnerH", &flags,
-                           ImGuiTableFlags_BordersInnerH);
-      ImGui::Unindent();
-
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersV", &flags,
-                           ImGuiTableFlags_BordersV);
-      ImGui::Indent();
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersOuterV", &flags,
-                           ImGuiTableFlags_BordersOuterV);
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersInnerV", &flags,
-                           ImGuiTableFlags_BordersInnerV);
-      ImGui::Unindent();
-
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersOuter", &flags,
-                           ImGuiTableFlags_BordersOuter);
-      ImGui::CheckboxFlags("ImGuiTableFlags_BordersInner", &flags,
-                           ImGuiTableFlags_BordersInner);
-      ImGui::Unindent();
-
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Cell contents:");
-      ImGui::SameLine();
-      ImGui::RadioButton("Text", &contents_type, CT_Text);
-      ImGui::SameLine();
-      ImGui::RadioButton("FillButton", &contents_type, CT_FillButton);
-      ImGui::Checkbox("Display headers", &display_headers);
-      ImGui::CheckboxFlags("ImGuiTableFlags_NoBordersInBody", &flags,
-                           ImGuiTableFlags_NoBordersInBody);
-      // ImGui::SameLine();
-
-      if (ImGui::BeginTable("table1", 5, flags)) {
-        // Display headers so we can inspect their interaction with borders
-        // (Headers are not the main purpose of this section of the demo, so
-        // we are not elaborating on them now. See other sections for
-        // details)
-        if (display_headers) {
-          ImGui::TableSetupColumn("Latitude");
-          ImGui::TableSetupColumn("Longitude");
-          ImGui::TableSetupColumn("Altitude");
-          ImGui::TableSetupColumn("Ground Speed");
-          ImGui::TableSetupColumn("Full Speed");
-          ImGui::TableHeadersRow();
-        }
-
-        for (int row = 0; row < gps.size(); row++) {
-          ImGui::TableNextRow();
-          for (int column = 0; column < 5; column++) {
-            ImGui::TableSetColumnIndex(column);
-            ImGui::Text("%.2f", reinterpret_cast<double *>(&gps[row])[column] *
-                                    (column > 2 ? 3.6 : 1.0));
-          }
-        }
-        ImGui::EndTable();
-      }
-    }
-    ImGui::End();
     delta.cs = laps_display.cs;
     static int old_selected_lap = laps_display.selected_lap;
     if (old_selected_lap != laps_display.selected_lap) {

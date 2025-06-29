@@ -45,7 +45,7 @@ macro(add_pacer_library name)
     add_custom_target(pacer_${name}_headers DEPENDS ${copied_headers})
 
     # Create the library target
-    add_library(pacer_${name} SHARED ${PACER_SOURCES} ${PACER_HEADERS})
+    add_library(pacer_${name} STATIC ${PACER_SOURCES} ${PACER_HEADERS})
 
     # Link headers copying to the target
     add_dependencies(pacer_${name} pacer_${name}_headers)
@@ -72,3 +72,4 @@ add_subdirectory(geometry)
 add_subdirectory(gps-source)
 add_subdirectory(laps-display)
 add_subdirectory(laps)
+add_subdirectory(bindings)

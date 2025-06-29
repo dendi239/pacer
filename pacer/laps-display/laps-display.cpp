@@ -33,14 +33,14 @@ void pacer::LapsDisplay::DragTimingLine(Segment *s, const char *name,
 
 void pacer::LapsDisplay::DisplayMap() {
   if (bounds.first.x >= bounds.second.x) {
-    bounds = laps.MinMax();
+    bounds = laps->MinMax();
     cs = CoordinateSystem(GPSSample{
         .lat = (bounds.first.y + bounds.second.y) / 2,
         .lon = (bounds.first.x + bounds.second.x) / 2,
         .altitude = 0,
     });
-    laps.SetCoordinateSystem(cs);
-    laps.sectors.start_line = laps.PickRandomStart();
+    laps->SetCoordinateSystem(cs);
+    laps->sectors.start_line = laps->PickRandomStart();
     auto min_ =
         cs.Local(GPSSample{.lon = bounds.first.x, .lat = bounds.first.y});
     auto max_ =
@@ -75,13 +75,13 @@ void pacer::LapsDisplay::DisplayMap() {
       "trace",
       [](int index, void *data) {
         auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-        return ld.ToImPlotPoint(ld.laps.GetPoint(index).point);
+        return ld.ToImPlotPoint(ld.laps->GetPoint(index).point);
       },
-      reinterpret_cast<void *>(this), (int)laps.PointCount());
+      reinterpret_cast<void *>(this), (int)laps->PointCount());
 
-  DragTimingLine(&laps.sectors.start_line, "Start", 0);
-  for (int i = 0; i < laps.SectorCount(); ++i) {
-    auto &s = laps.sectors.sector_lines[i];
+  DragTimingLine(&laps->sectors.start_line, "Start", 0);
+  for (int i = 0; i < laps->SectorCount(); ++i) {
+    auto &s = laps->sectors.sector_lines[i];
     std::stringstream ss;
     ss << "Sector " << i + 1;
     DragTimingLine(&s, ss.str().c_str(), i + 1);
@@ -94,38 +94,38 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
         "speed trace",
         [](int index, void *data) {
           auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-          auto [gps, time] = ld.laps.At(ld.selected_lap, index);
+          auto [gps, time] = ld.laps->At(ld.selected_lap, index);
 
           return ImPlotPoint{
-              (double)index, // ld.laps.Distance(ld.selected_lap, index),
-              ld.laps.Speed(ld.selected_lap, index) * 3.6};
+              (double)index, // ld.laps->Distance(ld.selected_lap, index),
+              ld.laps->Speed(ld.selected_lap, index) * 3.6};
         },
-        (void *)this, (int)laps.SampleCount(selected_lap));
+        (void *)this, (int)laps->SampleCount(selected_lap));
     ImPlot::PlotScatterG(
         "speed trace",
         [](int index, void *data) {
           auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-          auto [gps, time] = ld.laps.At(ld.selected_lap, index);
+          auto [gps, time] = ld.laps->At(ld.selected_lap, index);
 
           return ImPlotPoint{
-              (double)index, // ld.laps.Distance(ld.selected_lap, index),
-              ld.laps.Speed(ld.selected_lap, index) * 3.6};
+              (double)index, // ld.laps->Distance(ld.selected_lap, index),
+              ld.laps->Speed(ld.selected_lap, index) * 3.6};
         },
-        (void *)this, (int)laps.SampleCount(selected_lap));
+        (void *)this, (int)laps->SampleCount(selected_lap));
 
     ImPlot::EndPlot();
   }
 }
 bool pacer::LapsDisplay::DisplayTable() {
   if (ImGui::Button("Add sector")) {
-    laps.sectors.sector_lines.push_back(laps.PickRandomStart());
+    laps->sectors.sector_lines.push_back(laps->PickRandomStart());
   }
   ImGui::SameLine();
   if (ImGui::Button("Reset sectors")) {
-    laps.ClearSectors();
+    laps->ClearSectors();
   }
 
-  size_t sector_count = 1 + laps.SectorCount();
+  size_t sector_count = 1 + laps->SectorCount();
   if (!ImGui::BeginTable("Laps", 4 + 2 * (int)sector_count,
                          ImGuiTableFlags_RowBg |
                              ImGuiTableFlags_BordersInnerV)) {
@@ -144,7 +144,7 @@ bool pacer::LapsDisplay::DisplayTable() {
   }
   ImGui::TableHeadersRow();
 
-  for (int row = 0, i_sector = 0; row < laps.LapsCount(); ++row) {
+  for (int row = 0, i_sector = 0; row < laps->LapsCount(); ++row) {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
 
@@ -152,31 +152,31 @@ bool pacer::LapsDisplay::DisplayTable() {
 
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
       ImGui::SetDragDropPayload("MY_DND", &row, sizeof(int));
-      ImGui::Text("%.3f", laps.StartTimestamp(row));
+      ImGui::Text("%.3f", laps->StartTimestamp(row));
       ImGui::EndDragDropSource();
     }
 
     ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%zu", laps.SampleCount(row));
+    ImGui::Text("%zu", laps->SampleCount(row));
 
     ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%.2f", laps.GetLapDistance(row, cs));
+    ImGui::Text("%.2f", laps->GetLapDistance(row, cs));
 
     ImGui::TableSetColumnIndex(3);
-    if (ImGui::Button(std::format("{:.3f}", laps.LapTime(row)).c_str())) {
+    if (ImGui::Button(std::format("{:.3f}", laps->LapTime(row)).c_str())) {
       selected_lap = row == selected_lap ? -1 : row;
     }
 
     for (int i = 0; i < sector_count; ++i, ++i_sector) {
       ImGui::TableSetColumnIndex(4 + 2 * i);
-      if (i_sector < laps.RecordedSectors()) {
+      if (i_sector < laps->RecordedSectors()) {
 
-        ImGui::Text("%.3fkph", laps.SectorEntrySpeed(i_sector) * 3.6);
+        ImGui::Text("%.3fkph", laps->SectorEntrySpeed(i_sector) * 3.6);
       }
       ImGui::TableSetColumnIndex(5 + 2 * i);
 
-      if (i_sector < laps.RecordedSectors()) {
-        ImGui::Text("%.3fs", laps.SectorTime(i_sector));
+      if (i_sector < laps->RecordedSectors()) {
+        ImGui::Text("%.3fs", laps->SectorTime(i_sector));
       }
     }
   }

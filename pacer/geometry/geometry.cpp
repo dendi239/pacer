@@ -25,11 +25,13 @@ bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
     d1 = std::abs(d1);
     d2 = std::abs(d2);
 
-    *ratio = d1 / (d1 + d2);
+    *ratio = d2 / (d1 + d2);
   }
 
   return true;
 }
+
+pacer::Point pacer::ToPoint(Vec3f v) { return {v.x, v.y}; }
 
 pacer::Point pacer::ToPoint(Point x) { return x; }
 

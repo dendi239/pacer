@@ -1,11 +1,14 @@
 #include "gps-source.hpp"
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <sys/types.h>
 
 #include "GPMF_common.h"
 #include "GPMF_parser.h"
 #include "demo/GPMF_mp4reader.h"
+#include "pacer/datatypes/datatypes.hpp"
 
 namespace pacer {
 
@@ -239,5 +242,23 @@ auto SequentialGPSSource::CurrentTimeSpan() const -> std::pair<double, double> {
     return {start + left_len, end + left_len};
   }
   return {start, end};
+}
+uint32_t RawGPSSource::Samples(void *data,
+                               void (*on_sample)(void * /*data*/,
+                                                 GPSSample /*sample*/,
+                                                 size_t /*current_index*/,
+                                                 size_t /*total_records*/)) {
+  return 0;
+};
+
+uint32_t RawGPSSource::ReadSamples(
+    std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) {
+  return Samples(&on_sample, [](void *data, GPSSample sample,
+                                size_t current_index, size_t total_records) {
+    auto &f =
+        *reinterpret_cast<std::function<void(GPSSample, uint32_t, uint32_t)> *>(
+            data);
+    f(sample, current_index, total_records);
+  });
 }
 } // namespace pacer

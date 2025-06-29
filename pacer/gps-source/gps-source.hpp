@@ -5,16 +5,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <utility>
 
 #include <pacer/datatypes/datatypes.hpp>
 
 namespace pacer {
 
-class GPSSource {
+/// Base class for raw GPS source.
+///
+/// Being raw in this context means that it does not provide any meaningful
+/// timestamps to work with.
+class RawGPSSource {
 public:
-  GPSSource() = default;
-  virtual ~GPSSource() = default;
+  RawGPSSource() = default;
+  virtual ~RawGPSSource() = default;
 
   /// Main interface to take samples from current GPS source.
   ///
@@ -29,7 +34,7 @@ public:
   virtual uint32_t
   Samples(void *data, void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
                                         size_t /*current_index*/,
-                                        size_t /*total_records*/)) = 0;
+                                        size_t /*total_records*/));
 
   /// Convenient way of invoking Samples function: designed to be used with
   /// functional objects (e.g. lambdas).
@@ -39,6 +44,9 @@ public:
       return f(s, i, n);
     });
   }
+
+  uint32_t
+  ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample);
 
   /// Seeks to data chunk covering target.
   virtual uint32_t Seek(double target) = 0;
@@ -63,7 +71,7 @@ public:
 /// TODO: Provide even more low-level access to underlying samples,
 ///       might be useful to keep buffer for data in some sort of iterator
 ///       with option to iterate over GPSSample-s on top of it.
-class GPMFSource : public GPSSource {
+class GPMFSource : public RawGPSSource {
 public:
   explicit GPMFSource(size_t mp4handle);
   explicit GPMFSource(const char *filename);
@@ -94,7 +102,7 @@ public:
   bool IsEnd() override;
 
   /// Returns current samples' time span.
-  auto CurrentTimeSpan() const -> std::pair<double, double> override;
+  std::pair<double, double> CurrentTimeSpan() const override;
 
   /// Gets total MP4 duration.
   double GetTotalDuration() const override;
@@ -104,9 +112,9 @@ private:
   size_t mp4handle_;
 };
 
-class SequentialGPSSource : public GPSSource {
+class SequentialGPSSource : public RawGPSSource {
 public:
-  SequentialGPSSource(GPSSource *left, GPSSource *right)
+  SequentialGPSSource(RawGPSSource *left, RawGPSSource *right)
       : left_{left}, right_{right}, current_{left_} {}
 
   virtual ~SequentialGPSSource() override = default;
@@ -125,10 +133,31 @@ public:
   void Next() override;
 
   /// Returns current samples' time span.
-  auto CurrentTimeSpan() const -> std::pair<double, double> override;
+  std::pair<double, double> CurrentTimeSpan() const override;
 
 private:
-  GPSSource *left_, *right_, *current_;
+  RawGPSSource *left_, *right_, *current_;
 };
+
+enum class DatVersion {
+  JUST_DATA = 0,
+  WITH_TIMESTAMP = 1,
+};
+
+void ReadDatFile(const char *filename, void *data,
+                 void (*on_sample)(GPSSample sample, double time, void *data),
+                 DatVersion version);
+
+template <typename F>
+void ReadDatFile(const char *filename, F on_sample,
+                 DatVersion version = DatVersion::JUST_DATA) {
+  ReadDatFile(
+      filename, &on_sample,
+      [](GPSSample sample, double time, void *data) {
+        auto &f = *reinterpret_cast<F *>(data);
+        f(sample, time);
+      },
+      version);
+}
 
 } // namespace pacer

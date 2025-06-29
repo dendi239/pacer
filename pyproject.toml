@@ -1,18 +1,25 @@
 [project]
 authors = [{ name = "Denys Smirnov", email = "dendi239@gmail.com" }]
-dependencies = []
+dependencies = ["litgen @ git+https://github.com/pthom/litgen"]
 description = "Add a short description here"
 name = "pacer"
 requires-python = ">= 3.11"
 version = "0.1.0"
 
 [build-system]
-build-backend = "hatchling.build"
-requires = ["hatchling"]
+requires = ["scikit-build-core >=0.10", "nanobind >=1.3.2"]
+build-backend = "scikit_build_core.build"
 
 [tool.pixi.project]
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
+
+[tool.scikit-build]
+build.targets = ["_pacer"]
+build.verbose = true
+build-dir = "build/scikit-build"
+wheel.py-api = "cp313"
+# wheel.packages = ["pacer"]
 
 [tool.pixi.pypi-dependencies]
 pacer = { path = ".", editable = true }
@@ -25,3 +32,6 @@ jupyter = ">=1.1.1,<2"
 ipython = ">=9.2.0,<10"
 pandas = ">=2.2.3,<3"
 plotly = ">=6.1.0,<7"
+scikit-build-core = ">=0.11.4,<0.12"
+pytorch = ">=2.7.1,<3"
+python = ">=3.13.5,<4"

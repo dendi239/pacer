@@ -75,6 +75,7 @@ struct Laps {
   void AddPoint(GPSSample s, double t);
   size_t PointCount() const;
   PointInTime<GPSSample> GetPoint(size_t row) const;
+  void ClearPoints();
 
 private:
   struct LapChunk {

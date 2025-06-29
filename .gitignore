@@ -1,8 +1,14 @@
+.DS_Store
 .cache
 .vscode
 build/
 xcode-build/
 *.ini
+
+pacer-ios/
+
+# binary
+*.so
 
 # pixi environments
 .pixi

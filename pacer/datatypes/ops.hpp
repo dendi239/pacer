@@ -104,7 +104,7 @@ template <typename Concrete, typename T, size_t N> struct PointwiseOperators {
 
   Concrete &operator/=(const Concrete &other) {
     for (size_t i = 0; i < N; ++i)
-      static_cast<Concrete &>(*this)[i] /= other.data[i];
+      static_cast<Concrete &>(*this)[i] /= other[i];
     return static_cast<Concrete &>(*this);
   }
 

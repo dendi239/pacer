@@ -10,17 +10,17 @@ namespace nb = nanobind;
 using namespace nb::literals;
 
 NB_MODULE(_pacer_gps_source_impl, m) {
-  nb::class_<pacer::GPSSource>(m, "GPSSource")
-      .def("Seek", &pacer::GPSSource::Seek, nb::arg("target"))
-      .def("Next", &pacer::GPSSource::Next)
-      .def("IsEnd", &pacer::GPSSource::IsEnd)
-      .def("CurrentTimeSpan", &pacer::GPSSource::CurrentTimeSpan)
-      .def("GetTotalDuration", &pacer::GPSSource::GetTotalDuration);
+  nb::class_<pacer::RawGPSSource>(m, "GPSSource")
+      .def("seek", &pacer::RawGPSSource::Seek, nb::arg("target"))
+      .def("next", &pacer::RawGPSSource::Next)
+      .def("is_end", &pacer::RawGPSSource::IsEnd)
+      .def("current_time_span", &pacer::RawGPSSource::CurrentTimeSpan)
+      .def("get_total_duration", &pacer::RawGPSSource::GetTotalDuration);
 
-  nb::class_<pacer::GPMFSource, pacer::GPSSource>(m, "GPMFSource")
+  nb::class_<pacer::GPMFSource, pacer::RawGPSSource>(m, "GPMFSource")
       .def(nb::init<const char *>())
       .def(
-          "Samples",
+          "samples",
           [](pacer::GPMFSource &self,
              std::function<void(pacer::GPSSample, size_t, size_t)> on_sample) {
             return self.Samples(
@@ -34,20 +34,35 @@ NB_MODULE(_pacer_gps_source_impl, m) {
                 });
           },
           nb::arg("on_sample"))
-      .def("Seek", &pacer::GPMFSource::Seek, nb::arg("target"))
-      .def("Next", &pacer::GPMFSource::Next)
-      .def("IsEnd", &pacer::GPMFSource::IsEnd)
-      .def("CurrentTimeSpan", &pacer::GPMFSource::CurrentTimeSpan)
-      .def("GetTotalDuration", &pacer::GPMFSource::GetTotalDuration);
+      .def("seek", &pacer::GPMFSource::Seek, nb::arg("target"))
+      .def("next", &pacer::GPMFSource::Next)
+      .def("is_end", &pacer::GPMFSource::IsEnd)
+      .def("current_time_span", &pacer::GPMFSource::CurrentTimeSpan)
+      .def("get_total_duration", &pacer::GPMFSource::GetTotalDuration);
 
-  nb::class_<pacer::SequentialGPSSource, pacer::GPSSource>(
+  nb::class_<pacer::SequentialGPSSource, pacer::RawGPSSource>(
       m, "SequentialGPSSource")
-      .def(nb::init<pacer::GPSSource *, pacer::GPSSource *>())
-      .def("GetTotalDuration", &pacer::SequentialGPSSource::GetTotalDuration)
-      .def("IsEnd", &pacer::SequentialGPSSource::IsEnd)
-      .def("Samples", &pacer::SequentialGPSSource::Samples, nb::arg("data"),
+      .def(nb::init<pacer::RawGPSSource *, pacer::RawGPSSource *>())
+      .def("get_total_duration", &pacer::SequentialGPSSource::GetTotalDuration)
+      .def("is_end", &pacer::SequentialGPSSource::IsEnd)
+      .def("samples", &pacer::SequentialGPSSource::Samples, nb::arg("data"),
            nb::arg("on_sample"))
-      .def("Seek", &pacer::SequentialGPSSource::Seek, nb::arg("target"))
-      .def("Next", &pacer::SequentialGPSSource::Next)
-      .def("CurrentTimeSpan", &pacer::SequentialGPSSource::CurrentTimeSpan);
+      .def("seek", &pacer::SequentialGPSSource::Seek, nb::arg("target"))
+      .def("next", &pacer::SequentialGPSSource::Next)
+      .def("current_time_span", &pacer::SequentialGPSSource::CurrentTimeSpan);
+
+  nb::enum_<pacer::DatVersion>(m, "DatVersion")
+      .value("JUST_DATA", pacer::DatVersion::JUST_DATA)
+      .value("WITH_TIMESTAMP", pacer::DatVersion::WITH_TIMESTAMP)
+      .export_values();
+
+  m.def(
+      "read_dat_file",
+      [](const char *filename,
+         std::function<void(pacer::GPSSample, double)> on_sample,
+         pacer::DatVersion version = pacer::DatVersion::JUST_DATA) {
+        pacer::ReadDatFile(filename, on_sample, version);
+      },
+      nb::arg("filename"), nb::arg("on_sample"),
+      nb::arg("version") = pacer::DatVersion::JUST_DATA);
 }

@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/operators.h> // Required for operator overloading
 
 #include "geometry.hpp"
 
@@ -10,7 +11,8 @@ namespace nb = nanobind;
 NB_MODULE(_pacer_geometry_impl, m) {
   nb::class_<pacer::Vec3f>(m, "Vec3f")
       .def(nb::init<>())
-      .def(nb::init<double, double, double>())
+      .def(nb::init<double, double, double>(), nb::arg("x"), nb::arg("y"),
+           nb::arg("z"))
       .def("__getitem__",
            [](const pacer::Vec3f &v, size_t i) {
              if (i >= 3) {
@@ -38,8 +40,40 @@ NB_MODULE(_pacer_geometry_impl, m) {
             .format(s.lat, s.lon, s.altitude, s.full_speed, s.ground_speed);
       });
 
+  nb::class_<pacer::PointInTime<pacer::GPSSample>>(m, "GPSPointInTime")
+      .def(nb::init<pacer::GPSSample, double>())
+      .def_ro("point", &pacer::PointInTime<pacer::GPSSample>::point)
+      .def_ro("time", &pacer::PointInTime<pacer::GPSSample>::time)
+      .def("__repr__", [](const pacer::PointInTime<pacer::GPSSample> &pit) {
+        return nb::str("GPSPointInTime(point={}, time={})")
+            .format(pit.point, pit.time);
+      });
+
+  nb::class_<pacer::Point>(m, "Point")
+      .def(nb::init<>())
+      .def(nb::init<double, double>(), nb::arg("x"), nb::arg("y"))
+      .def_rw("x", &pacer::Point::x)
+      .def_rw("y", &pacer::Point::y)
+      .def("scalar", &pacer::Point::Scalar, nb::arg("other"))
+      .def("__add__", std::plus<pacer::Point>{}, nb::arg("other"))
+      .def("__sub__", std::minus<pacer::Point>{}, nb::arg("other"))
+      .def(
+          "__mul__",
+          [](const pacer::Point &p, double scalar) { return p * scalar; },
+          nb::arg("scalar"))
+      // Enable reverse multiplication (float * Point)
+      .def(
+          "__rmul__",
+          [](const pacer::Point &p, double scalar) { return p * scalar; },
+          nb::arg("scalar"))
+      .def("__repr__", [](const pacer::Point &point) {
+        return nb::str("Point(x={}, y={})").format(point.x, point.y);
+      });
+
   nb::class_<pacer::CoordinateSystem>(m, "CoordinateSystem")
       .def(nb::init<pacer::GPSSample>())
-      .def("Local", &pacer::CoordinateSystem::Local, nb::arg("point"))
-      .def("Global", &pacer::CoordinateSystem::Global, nb::arg("point"));
+      .def("local", &pacer::CoordinateSystem::Local, nb::arg("point"))
+      .def("global", &pacer::CoordinateSystem::Global, nb::arg("point"))
+      .def("distance", &pacer::CoordinateSystem::Distance, nb::arg("from"),
+           nb::arg("to"));
 }
