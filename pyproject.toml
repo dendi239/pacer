@@ -14,6 +14,9 @@ build-backend = "scikit_build_core.build"
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
+[tool.setuptools.package-data]
+pacer = ["__init__.pyi", "*.pyi"]
+
 [tool.scikit-build]
 build.targets = ["_pacer"]
 build.verbose = true

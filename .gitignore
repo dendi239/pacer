@@ -2,6 +2,7 @@
 .cache
 .vscode
 build/
+*/__pycache__/*
 xcode-build/
 *.ini
 
