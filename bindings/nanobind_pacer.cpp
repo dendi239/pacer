@@ -85,12 +85,12 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::GPSSample * self, double lat = double(), double lon = double(), double altitude = double(), double full_speed = double(), double ground_speed = double())
       {
           new (self) pacer::GPSSample();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->lat = lat;
-          r_ctor_->lon = lon;
-          r_ctor_->altitude = altitude;
-          r_ctor_->full_speed = full_speed;
-          r_ctor_->ground_speed = ground_speed;
+          auto r = self;
+          r->lat = lat;
+          r->lon = lon;
+          r->altitude = altitude;
+          r->full_speed = full_speed;
+          r->ground_speed = ground_speed;
       },
       nb::arg("lat") = double(), nb::arg("lon") = double(), nb::arg("altitude") = double(), nb::arg("full_speed") = double(), nb::arg("ground_speed") = double()
       )
@@ -108,9 +108,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::PointInTime<GPSSample> * self, pacer::GPSSample point = pacer::GPSSample(), double time = double())
       {
           new (self) pacer::PointInTime<GPSSample>();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->point = point;
-          r_ctor_->time = time;
+          auto r = self;
+          r->point = point;
+          r->time = time;
       },
       nb::arg("point") = pacer::GPSSample(), nb::arg("time") = double()
       )
@@ -174,9 +174,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Segment * self, pacer::Point first = pacer::Point(), pacer::Point second = pacer::Point())
       {
           new (self) pacer::Segment();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->first = first;
-          r_ctor_->second = second;
+          auto r = self;
+          r->first = first;
+          r->second = second;
       },
       nb::arg("first") = pacer::Point(), nb::arg("second") = pacer::Point()
       )
@@ -225,10 +225,10 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Lap * self, float width = float(), std::vector<PointInTime<GPSSample>> points = std::vector<PointInTime<GPSSample>>(), std::vector<double> cum_distances = std::vector<double>())
       {
           new (self) pacer::Lap();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->width = width;
-          r_ctor_->points = points;
-          r_ctor_->cum_distances = cum_distances;
+          auto r = self;
+          r->width = width;
+          r->points = points;
+          r->cum_distances = cum_distances;
       },
       nb::arg("width") = float(), nb::arg("points") = std::vector<PointInTime<GPSSample>>(), nb::arg("cum_distances") = std::vector<double>()
       )
@@ -256,9 +256,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Sectors * self, Segment start_line = Segment(), std::vector<Segment> sector_lines = std::vector<Segment>())
       {
           new (self) pacer::Sectors();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->start_line = start_line;
-          r_ctor_->sector_lines = sector_lines;
+          auto r = self;
+          r->start_line = start_line;
+          r->sector_lines = sector_lines;
       },
       nb::arg("start_line") = Segment(), nb::arg("sector_lines") = std::vector<Segment>()
       )
@@ -273,8 +273,8 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Laps * self, pacer::Sectors sectors = pacer::Sectors())
       {
           new (self) pacer::Laps();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->sectors = sectors;
+          auto r = self;
+          r->sectors = sectors;
       },
       nb::arg("sectors") = pacer::Sectors()
       )
@@ -334,28 +334,28 @@ void py_init_module_pacer(nb::module_ &m) {
   ////////////////////    <generated_from:gps-source.hpp>    ////////////////////
   auto pyClassRawGPSSource =
       nb::class_<pacer::RawGPSSource, pacer::RawGPSSource_trampoline>
-          (m, "RawGPSSource", "/ Base class for raw GPS source.\n/\n/ Being raw in this context means that it does not provide any meaningful\n/ timestamps to work with.")
+          (m, "RawGPSSource", " Base class for raw GPS source.\n\n Being raw in this context means that it does not provide any meaningful\n timestamps to work with.")
       .def(nb::init<>())
       .def("read_samples",
           &pacer::RawGPSSource::ReadSamples, nb::arg("on_sample"))
       .def("seek",
           &pacer::RawGPSSource::Seek,
           nb::arg("target"),
-          "/ Seeks to data chunk covering target.")
+          "Seeks to data chunk covering target.")
       .def("next",
-          &pacer::RawGPSSource::Next, "/ Proceeds to next piece of data.")
+          &pacer::RawGPSSource::Next, "Proceeds to next piece of data.")
       .def("is_end",
-          &pacer::RawGPSSource::IsEnd, "/ Checks whenever we already reachend end of the stream.")
+          &pacer::RawGPSSource::IsEnd, "Checks whenever we already reachend end of the stream.")
       .def("current_time_span",
-          &pacer::RawGPSSource::CurrentTimeSpan, "/ Returns current samples' time span.")
+          &pacer::RawGPSSource::CurrentTimeSpan, "Returns current samples' time span.")
       .def("get_total_duration",
-          &pacer::RawGPSSource::GetTotalDuration, "/ Gets total MP4 duration.")
+          &pacer::RawGPSSource::GetTotalDuration, "Gets total MP4 duration.")
       ;
 
 
   auto pyClassGPMFSource =
       nb::class_<pacer::GPMFSource, pacer::RawGPSSource>
-          (m, "GPMFSource", "/ Handler for GPMF track inside MP4 container.\n/\n/ Allows for traversing media file and getting GPS data out of it.\n/\n/ TODO: Provide even more low-level access to underlying samples,\n/       might be useful to keep buffer for data in some sort of iterator\n/       with option to iterate over GPSSample-s on top of it.")
+          (m, "GPMFSource", " Handler for GPMF track inside MP4 container.\n\n Allows for traversing media file and getting GPS data out of it.\n\n TODO: Provide even more low-level access to underlying samples,\n       might be useful to keep buffer for data in some sort of iterator\n       with option to iterate over GPSSample-s on top of it.")
       .def(nb::init<size_t>(),
           nb::arg("mp4handle"))
       .def(nb::init<const char *>(),
@@ -363,15 +363,15 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("seek",
           &pacer::GPMFSource::Seek,
           nb::arg("target"),
-          "/ Seeks to data chunk covering target.")
+          "Seeks to data chunk covering target.")
       .def("next",
-          &pacer::GPMFSource::Next, "/ Proceeds to next piece of data.")
+          &pacer::GPMFSource::Next, "Proceeds to next piece of data.")
       .def("is_end",
-          &pacer::GPMFSource::IsEnd, "/ Checks whenever we already reachend end of the stream.")
+          &pacer::GPMFSource::IsEnd, "Checks whenever we already reachend end of the stream.")
       .def("current_time_span",
-          &pacer::GPMFSource::CurrentTimeSpan, "/ Returns current samples' time span.")
+          &pacer::GPMFSource::CurrentTimeSpan, "Returns current samples' time span.")
       .def("get_total_duration",
-          &pacer::GPMFSource::GetTotalDuration, "/ Gets total MP4 duration.")
+          &pacer::GPMFSource::GetTotalDuration, "Gets total MP4 duration.")
       ;
 
 
@@ -389,7 +389,7 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("next",
           &pacer::SequentialGPSSource::Next)
       .def("current_time_span",
-          &pacer::SequentialGPSSource::CurrentTimeSpan, "/ Returns current samples' time span.")
+          &pacer::SequentialGPSSource::CurrentTimeSpan, "Returns current samples' time span.")
       ;
 
 
@@ -407,9 +407,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::LapsDisplay * self, int selected_lap = -1, CoordinateSystem cs = CoordinateSystem())
       {
           new (self) pacer::LapsDisplay();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->selected_lap = selected_lap;
-          r_ctor_->cs = cs;
+          auto r = self;
+          r->selected_lap = selected_lap;
+          r->cs = cs;
       },
       nb::arg("selected_lap") = -1, nb::arg("cs") = CoordinateSystem()
       )
@@ -436,10 +436,10 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::DeltaLapsComparision * self, Lap reference_lap = Lap(), CoordinateSystem cs = CoordinateSystem(), std::unordered_set<int> selected_laps = {})
       {
           new (self) pacer::DeltaLapsComparision();  // placement new
-          auto r_ctor_ = self;
-          r_ctor_->reference_lap = reference_lap;
-          r_ctor_->cs = cs;
-          r_ctor_->selected_laps = selected_laps;
+          auto r = self;
+          r->reference_lap = reference_lap;
+          r->cs = cs;
+          r->selected_laps = selected_laps;
       },
       nb::arg("reference_lap") = Lap(), nb::arg("cs") = CoordinateSystem(), nb::arg("selected_laps") = std::unordered_set<int>{}
       )

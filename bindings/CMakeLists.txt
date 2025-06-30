@@ -2,11 +2,11 @@ include(litgen.cmake)
 
 litgen_find_nanobind()
 
-# add_custom_target(
-#     _generate_pacer_bindings
-#     COMMAND "${Python_EXECUTABLE}"  "${CMAKE_CURRENT_SOURCE_DIR}/generate-bindings.py"
-#     COMMENT "Building pacer python bindings"
-# )
+add_custom_target(
+    _generate_pacer_bindings
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate-bindings.py"
+    COMMENT "Building pacer python bindings"
+)
 
 # The python module sources
 set(python_module_sources
@@ -26,16 +26,15 @@ target_link_libraries(pacer INTERFACE
 )
 
 if (SKBUILD)
-  set(LITGEN_PATH  "${CMAKE_INSTALL_PREFIX}" CACHE PATH "")
+  set(LITGEN_PATH "${CMAKE_INSTALL_PREFIX}")
 else()
-  set(LITGEN_PATH  "${CMAKE_SOURCE_DIR}" CACHE PATH "")
+  set(LITGEN_PATH  "${CMAKE_SOURCE_DIR}/bindings")
 endif()
 
 # Call litgen_setup_module to generate the python wrapper around the native module
 litgen_setup_module(
     # The C++ library for which we are building bindings
     pacer
-
     # The native python module name
     _pacer
     # This is the python wrapper around the native module
@@ -44,7 +43,7 @@ litgen_setup_module(
     "${LITGEN_PATH}"
 )
 
-# add_dependencies(
-#     _pacer
-#     _generate_pacer_bindings
-# )
+add_dependencies(
+    _pacer
+    _generate_pacer_bindings
+)

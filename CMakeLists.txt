@@ -21,4 +21,4 @@ add_subdirectory(pacer)
 add_subdirectory(apps)
 add_subdirectory(examples)
 add_subdirectory(tests)
-
+add_subdirectory(bindings)

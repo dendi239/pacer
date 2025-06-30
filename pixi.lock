@@ -2520,7 +2520,7 @@ packages:
   name: pacer
   version: 0.1.0
   path: .
-  sha256: 547f04d6ecf605d216d6f2aa9ced9adeb4eb8168999ca69520f3b6bc7233c9c1
+  sha256: cc1f31b9df2cfbd5089a36adf2ca2cdb08749e5145dd7c6015daaa23a2834db1
   requires_dist:
   - litgen @ git+https://github.com/pthom/litgen
   requires_python: '>=3.11'
