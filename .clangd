@@ -1,5 +1,5 @@
 CompileFlags:
-  CompilationDatabase: build  # Path to compile_commands.json
+  CompilationDatabase: build/Release  # Path to compile_commands.json
 
 Index:
   Background: Build  # Index the project in the background
