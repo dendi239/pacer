@@ -10,6 +10,7 @@ class GPSSample:
     altitude: float
     full_speed: float
     ground_speed: float
+    timestamp_ms: int
     def __init__(
         self,
         lat: float = float(),
@@ -17,6 +18,7 @@ class GPSSample:
         altitude: float = float(),
         full_speed: float = float(),
         ground_speed: float = float(),
+        timestamp_ms: int = int(),
     ) -> None:
         """Auto-generated default constructor with named params"""
         pass

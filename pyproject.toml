@@ -14,19 +14,9 @@ build-backend = "scikit_build_core.build"
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
-[tool.setuptools.package-dir]
-"" = ""
-"bindings" = "pacer.bindings"
-
-[tool.scikit-build]
-build.targets = ["_pacer"]
-build.verbose = true
-build-dir = "build/scikit-build"
-wheel.py-api = "cp313"
-# wheel.packages = ["pacer", "bindings/pacer"]
-
 [tool.pixi.pypi-dependencies]
-pacer = { path = ".", editable = true }
+imgui = { path = "bindings/imgui", editable = true }
+pacer = { path = "bindings/pacer", editable = true }
 
 [tool.pixi.tasks]
 

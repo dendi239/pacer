@@ -196,13 +196,14 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/52/e5/f7bf17207cf87fa6e9b676576749c6b6ed0d70f179a3d812c997870291c3/black-25.1.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/85/32/10bb5764d90a8eee674e9dc6f4db6a0ab47c8c4d0d83c27f7c39ac415a4d/click-8.2.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6b/b6/82c7e601d6d3c3278c40b7bd35e17e82aa227f050aa9f66cb7b7fce29471/fire-0.7.0.tar.gz
-      - pypi: git+https://github.com/pthom/litgen@21c3d65a2181aa8d24f14d218445de946ac4d472
+      - pypi: git+https://github.com/pthom/litgen@2fafb1e202689df5bb7b0457c5d2b81527fb3829
       - pypi: https://files.pythonhosted.org/packages/56/b3/7c69b37f03260a061883bec0e7b05be7117c1b1c85f5212c72c8c2bc3c8c/munch-4.0.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/96/14/989883082b395146120d34ca7e484a2b24cb73b0e428576a3a4249bd4082/nanobind-2.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c4/e2/703b7a07724448f8dad6ebdcdea33378e4d14a3efcb7eb8288514b8560c9/srcml_caller-0.4.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/4f/bd/de8d508070629b6d84a30d01d57e4a65c69aa7f5abe7560b8fad3b50ea59/termcolor-3.1.0-py3-none-any.whl
-      - pypi: .
+      - pypi: bindings/imgui
+      - pypi: bindings/pacer
 packages:
 - kind: conda
   name: anyio
@@ -1017,6 +1018,15 @@ packages:
   - pkg:pypi/idna?source=hash-mapping
   size: 49765
   timestamp: 1733211921194
+- kind: pypi
+  name: imgui
+  version: 0.1.0
+  path: bindings/imgui
+  sha256: 59291afa23842bbc77597fbd9b24d687aae5440ddf932e9aea645b57e632b529
+  requires_dist:
+  - litgen @ git+https://github.com/pthom/litgen
+  requires_python: '>=3.11'
+  editable: true
 - kind: conda
   name: importlib-metadata
   version: 8.6.1
@@ -2073,8 +2083,8 @@ packages:
   timestamp: 1727963202283
 - kind: pypi
   name: litgen
-  version: 0.20.0
-  url: git+https://github.com/pthom/litgen@21c3d65a2181aa8d24f14d218445de946ac4d472
+  version: 0.21.0
+  url: git+https://github.com/pthom/litgen@2fafb1e202689df5bb7b0457c5d2b81527fb3829
   requires_dist:
   - munch
   - fire
@@ -2532,8 +2542,8 @@ packages:
 - kind: pypi
   name: pacer
   version: 0.1.0
-  path: .
-  sha256: cc1f31b9df2cfbd5089a36adf2ca2cdb08749e5145dd7c6015daaa23a2834db1
+  path: bindings/pacer
+  sha256: 32e63a48739a8955d080de3eca41381634e841536015009962cbfa83b7dea36a
   requires_dist:
   - litgen @ git+https://github.com/pthom/litgen
   requires_python: '>=3.11'

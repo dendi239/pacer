@@ -110,9 +110,8 @@ def my_litgen_options() -> litgen.LitgenOptions:
 
 
 def autogenerate() -> None:
-    repository_dir = Path(__file__).parent.parent
+    repository_dir = Path(__file__).parent.parent.parent
 
-    header_files = [str(s) for s in (Path(repository_dir) / "pacer").glob("**/*.hpp")]
     header_files = [
         repository_dir / "pacer/datatypes/datatypes.hpp",
         repository_dir / "pacer/geometry/geometry.hpp",
@@ -121,13 +120,13 @@ def autogenerate() -> None:
         repository_dir / "pacer/laps-display/laps-display.hpp",
     ]
 
-    output_cpp_pydef_file = repository_dir / "bindings/nanobind_pacer.cpp"
+    output_cpp_pydef_file = repository_dir / "bindings/pacer/nanobind_pacer.cpp"
 
     litgen.write_generated_code_for_files(
         options=my_litgen_options(),
         input_cpp_header_files=[str(p) for p in header_files],
         output_cpp_pydef_file=output_cpp_pydef_file,
-        output_stub_pyi_file=str(repository_dir / "bindings/pacer/__init__.pyi"),
+        output_stub_pyi_file=str(repository_dir / "bindings/pacer/pacer/__init__.pyi"),
     )
 
 

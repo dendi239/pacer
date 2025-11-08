@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "implot.h"
 #include "implot_internal.h"
 
@@ -220,22 +221,26 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
   }
 
   std::unordered_map<int, Lap> resampled_laps;
+
+  bool dnd;
+  if ((dnd = ImGui::BeginDragDropTargetCustom(ImGui::GetCurrentWindow()->Rect(),
+                                              239))) {
+    ImGui::Text("Drop laps here to select them");
+    if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("MY_DND")) {
+      int i = *(int *)payload->Data;
+      if (selected_laps.contains(i)) {
+        selected_laps.erase(i);
+      } else {
+        selected_laps.insert(i);
+      }
+    }
+  }
+
   if (ImPlot::BeginSubplots("", 2, 1, ImVec2(-1, -1),
                             ImPlotSubplotFlags_LinkAllX)) {
+
     if (ImPlot::BeginPlot("Telemetry", ImVec2())) {
       ImPlot::SetupAxis(ImAxis_X1, "", ImPlotAxisFlags_NoTickLabels);
-      if (ImPlot::BeginDragDropTargetPlot()) {
-        if (const ImGuiPayload *payload =
-                ImGui::AcceptDragDropPayload("MY_DND")) {
-          int i = *(int *)payload->Data;
-          if (selected_laps.contains(i)) {
-            selected_laps.erase(i);
-          } else {
-            selected_laps.insert(i);
-          }
-        }
-        ImPlot::EndDragDropTarget();
-      }
 
       for (auto lap_id : selected_laps) {
         auto lap = reference_lap.Resample(laps.GetLap(lap_id), cs);
@@ -292,5 +297,9 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
       ImPlot::EndPlot();
     }
   }
+
   ImPlot::EndSubplots();
+  if (dnd) {
+    ImGui::EndDragDropTarget();
+  }
 }

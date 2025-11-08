@@ -1,6 +1,6 @@
-add_executable(timeline timeline.cpp)
+hello_imgui_add_app(timeline timeline.cpp)
+
 target_link_libraries(timeline PRIVATE
-    imgui::glfw3
     pacer::laps
     pacer::gps-source
     pacer::laps-display

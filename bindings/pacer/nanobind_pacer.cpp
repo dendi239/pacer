@@ -82,7 +82,7 @@ void py_init_module_pacer(nb::module_ &m) {
   auto pyClassGPSSample =
       nb::class_<pacer::GPSSample>
           (m, "GPSSample", "")
-      .def("__init__", [](pacer::GPSSample * self, double lat = double(), double lon = double(), double altitude = double(), double full_speed = double(), double ground_speed = double())
+      .def("__init__", [](pacer::GPSSample * self, double lat = double(), double lon = double(), double altitude = double(), double full_speed = double(), double ground_speed = double(), int64_t timestamp_ms = int64_t())
       {
           new (self) pacer::GPSSample();  // placement new
           auto r = self;
@@ -91,14 +91,16 @@ void py_init_module_pacer(nb::module_ &m) {
           r->altitude = altitude;
           r->full_speed = full_speed;
           r->ground_speed = ground_speed;
+          r->timestamp_ms = timestamp_ms;
       },
-      nb::arg("lat") = double(), nb::arg("lon") = double(), nb::arg("altitude") = double(), nb::arg("full_speed") = double(), nb::arg("ground_speed") = double()
+      nb::arg("lat") = double(), nb::arg("lon") = double(), nb::arg("altitude") = double(), nb::arg("full_speed") = double(), nb::arg("ground_speed") = double(), nb::arg("timestamp_ms") = int64_t()
       )
       .def_rw("lat", &pacer::GPSSample::lat, "")
       .def_rw("lon", &pacer::GPSSample::lon, "")
       .def_rw("altitude", &pacer::GPSSample::altitude, "")
       .def_rw("full_speed", &pacer::GPSSample::full_speed, "")
       .def_rw("ground_speed", &pacer::GPSSample::ground_speed, "")
+      .def_rw("timestamp_ms", &pacer::GPSSample::timestamp_ms, "")
       ;
 
 
@@ -478,9 +480,9 @@ void py_init_module_pacer(nb::module_ &m) {
   });
 
   pyClassSegment.def("__repr__", [](const pacer::Segment &s) {
-    return "Segment(first=" + std::to_string(s.first.x) + ", " +
-           std::to_string(s.first.y) +
-           ", second=" + std::to_string(s.second.x) + ", " +
-           std::to_string(s.second.y) + ")";
+    return "Segment(first=(" + std::to_string(s.first.x) + ", " +
+           std::to_string(s.first.y) + "), second=(" +
+           std::to_string(s.second.x) + ", " + std::to_string(s.second.y) +
+           "))";
   });
 }

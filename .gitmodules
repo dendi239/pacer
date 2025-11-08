@@ -10,3 +10,6 @@
 [submodule "3rdparty/nanobind"]
 	path = 3rdparty/nanobind
 	url = https://github.com/wjakob/nanobind
+[submodule "3rdparty/hello_imgui"]
+	path = 3rdparty/hello_imgui
+	url = git@github.com:pthom/hello_imgui.git
