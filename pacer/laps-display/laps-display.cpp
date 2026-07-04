@@ -34,6 +34,9 @@ void pacer::LapsDisplay::DragTimingLine(Segment *s, const char *name,
 
 void pacer::LapsDisplay::DisplayMap() {
   if (bounds.first.x >= bounds.second.x) {
+    if (laps->PointCount() == 0)
+      goto plot_data;
+
     bounds = laps->MinMax();
     cs = CoordinateSystem(GPSSample{
         .lat = (bounds.first.y + bounds.second.y) / 2,
@@ -52,12 +55,24 @@ void pacer::LapsDisplay::DisplayMap() {
     });
     bounds = {{min_[0], min_[1]}, {max_[0], max_[1]}};
 
-    // ImPlot::SetupAxisLimits(ImAxis_X1, min_[0], max_[0]);
-    // ImPlot::SetupAxisLimits(ImAxis_Y1, min_[1], max_[1]);
-
     auto gp = ImPlot::GetCurrentContext();
 
+    if (!gp || gp->CurrentPlot == nullptr) {
+      return;
+    }
+
     auto plot_size = gp->CurrentPlot->PlotRect.GetSize();
+
+    // Guard against zero-sized plot rect which may lead to division by zero
+    if (plot_size.x <= 0.0 || plot_size.y <= 0.0) {
+      return;
+    }
+
+    // Guard against NaN bounds that can propagate into axis limits
+    if (std::isnan(bounds.first.x) || std::isnan(bounds.first.y) ||
+        std::isnan(bounds.second.x) || std::isnan(bounds.second.y)) {
+      return;
+    }
 
     auto x_width = std::max(bounds.second.x - bounds.first.x,
                             (bounds.second.y - bounds.first.y) * plot_size.x /
@@ -69,12 +84,16 @@ void pacer::LapsDisplay::DisplayMap() {
 
     ImPlot::SetupAxisLimits(
         ImAxis_X1, (bounds.first.x + bounds.second.x) / 2 - x_width / 2,
-        (bounds.first.x + bounds.second.x) / 2 + x_width / 2, ImPlotCond_Once);
+        (bounds.first.x + bounds.second.x) / 2 + x_width / 2,
+        ImPlotCond_Always);
 
     ImPlot::SetupAxisLimits(
         ImAxis_Y1, (bounds.first.y + bounds.second.y) / 2 - y_width / 2,
-        (bounds.first.y + bounds.second.y) / 2 + y_width / 2, ImPlotCond_Once);
+        (bounds.first.y + bounds.second.y) / 2 + y_width / 2,
+        ImPlotCond_Always);
   }
+
+plot_data:
 
   ImPlot::PlotLineG(
       "trace",
@@ -272,20 +291,20 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
             [&](int i, int j) { return laps.LapTime(i) < laps.LapTime(j); });
 
         auto &best_lap = resampled_laps[best_lap_id];
+        int plot_count = static_cast<int>(best_lap.points.size());
 
         for (int lap_id : selected_laps) {
           auto &lap = resampled_laps[lap_id];
+          int plot_count = static_cast<int>(
+              std::min(lap.points.size(), best_lap.points.size()));
+          if (plot_count <= 0)
+            continue;
+
           std::tuple<Lap &, Lap &> data{lap, best_lap};
           ImPlot::PlotLineG(
               std::format("lap {}", lap_id).c_str(),
               [](int index, void *data) -> ImPlotPoint {
                 auto [lap, best_lap] = *(std::tuple<Lap &, Lap &> *)data;
-                if (lap.points.size() <= index ||
-                    best_lap.points.size() <= index) {
-                  return {best_lap.cum_distances[index],
-                          lap.LapTime() - best_lap.LapTime()};
-                }
-
                 auto lap_time = lap.points[index].time - lap.points[0].time;
                 auto best_time =
                     best_lap.points[index].time - best_lap.points[0].time;
@@ -295,7 +314,7 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
                 return ImPlotPoint{best_lap.cum_distances[index],
                                    lap_time - best_time};
               },
-              &data, reference_lap.points.size());
+              &data, plot_count);
         }
       }
       ImPlot::EndPlot();
