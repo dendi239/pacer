@@ -191,6 +191,7 @@ class Lap:
     width: float
 
     points: List[PointInTime[GPSSample]]
+
     cum_distances: List[float]
 
     def fill_distances(self, cs: CoordinateSystem) -> None:
@@ -222,6 +223,7 @@ class Lap:
 
 class Sectors:
     start_line: Segment
+
     sector_lines: List[Segment]
     def __init__(
         self,
@@ -416,7 +418,7 @@ class SequentialGPSSource(RawGPSSource):
         """Returns current samples' time span."""
         pass
 
-class DatVersion(enum.Enum):
+class DatVersion(enum.IntEnum):
     just_data = enum.auto()  # (= 0)
     with_timestamp = enum.auto()  # (= 1)
 

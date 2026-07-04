@@ -1,4 +1,4 @@
-litgen_find_nanobind()
+find_package(nanobind REQUIRED)
 
 add_custom_target(
     _generate_imgui_bindings
@@ -14,8 +14,10 @@ set(python_module_sources
 
 nanobind_add_module(_imgui ${python_module_sources})
 
+target_link_libraries(_imgui PRIVATE imgui::imgui)
+
 if (SKBUILD)
-  set(LITGEN_PATH_IMGUI "${CMAKE_INSTALL_PREFIX}" CACHE PATH "Path to install the imgui python module")
+  set(LITGEN_PATH_IMGUI "${CMAKE_INSTALL_PREFIX}/imgui" CACHE PATH "Path to install the imgui python module")
 else()
   set(LITGEN_PATH_IMGUI  "${CMAKE_SOURCE_DIR}/bindings/imgui" CACHE PATH "Path to install the imgui python module")
 endif()
@@ -36,3 +38,12 @@ add_dependencies(
     _imgui
     _generate_imgui_bindings
 )
+install(TARGETS _imgui DESTINATION imgui COMPONENT imgui_bindings)
+install(FILES imgui/__init__.py imgui/__init__.pyi DESTINATION imgui COMPONENT imgui_bindings)
+
+# Also copy the built module to the source tree for editable installs to work immediately
+if(SKBUILD)
+    add_custom_command(TARGET _imgui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:_imgui> ${CMAKE_CURRENT_SOURCE_DIR}/imgui
+    )
+endif()

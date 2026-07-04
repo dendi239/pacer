@@ -22,7 +22,7 @@ macro(add_pacer_library name)
     # Create isolated include directory in the build tree
     set(include_dir "${CMAKE_CURRENT_BINARY_DIR}/include/pacer/${name}")
     set(include_prefix pacer/${name})
-    file(MAKE_DIRECTORY "${include_dir}")
+    file(MAKE_DIRECTORY "${include_dir}/${include_prefix}")
 
     # Copy headers to build include directory
     set(copied_headers)

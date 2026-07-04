@@ -48,8 +48,8 @@ pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to,
       .lat = from.lat * (1 - ratio) + to.lat * ratio,
       .lon = from.lon * (1 - ratio) + to.lon * ratio,
       .altitude = from.altitude * (1 - ratio) + to.altitude * ratio,
-      .ground_speed = from.ground_speed * (1 - ratio) + to.ground_speed * ratio,
       .full_speed = from.full_speed * (1 - ratio) + to.full_speed * ratio,
+      .ground_speed = from.ground_speed * (1 - ratio) + to.ground_speed * ratio,
   };
 }
 

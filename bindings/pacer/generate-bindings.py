@@ -129,6 +129,42 @@ def autogenerate() -> None:
         output_stub_pyi_file=str(repository_dir / "bindings/pacer/pacer/__init__.pyi"),
     )
 
+    post_process(output_cpp_pydef_file)
+
+
+def post_process(filepath: Path) -> None:
+    """Removes default arguments for object types to avoid memory leaks."""
+    content = filepath.read_text()
+    
+    # List of types that should not have default values in __init__
+    # We want to remove ' = pacer::Type()' or ' = pacer::Type{}' 
+    # appearing in lambda dict or nb::arg().
+    # Regex match: " = pacer::[A-Za-z0-9_]+(\(\)|\{\})"
+    
+    import re
+    # We carefully only target the generated __init__ lambdas and nb::arg definitions
+    # by assuming they look like " = pacer::Type()" or " = pacer::Type{}"
+    # We should probably be specific about the types we care about: Point, Segment, Lap, Sectors, CoordinateSystem
+    
+    types_to_fix = [
+        "Point", "Segment", "Lap", "Sectors", "CoordinateSystem", "GPSSample", "Vec3f", "PointInTime<GPSSample>"
+    ]
+    
+    for t in types_to_fix:
+        # Replace " = pacer::Type()" with ""
+        # Regex: space = space pacer::Type\(\)
+        # We need to escape the type name which might contain < > etc.
+        escaped_type = re.escape(t)
+        
+        pattern = r" = pacer::" + escaped_type + r"\(\)"
+        content = re.sub(pattern, "", content)
+        
+        # Also handle potential brace init: " = pacer::Type{}"
+        pattern_brace = r" = pacer::" + escaped_type + r"\{\}"
+        content = re.sub(pattern_brace, "", content)
+
+    filepath.write_text(content)
+
 
 if __name__ == "__main__":
     autogenerate()

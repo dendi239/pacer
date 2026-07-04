@@ -13,7 +13,7 @@ requires = [
     "nanobind >=1.3.2",
     "litgen",
 ]
-# build-backend = "scikit_build_core.build"
+build-backend = "scikit_build_core.build"
 
 [tool.pixi.project]
 channels = ["conda-forge"]
@@ -25,10 +25,10 @@ pacer = ["*.so", "*.pyd", "**/*.pyi"]
 [tool.setuptools]
 packages = ["pacer"]
 
-# [tool.scikit-build]
-# build.targets = ["_pacer"]
-# build.verbose = true
-# build-dir = "../../build/scikit-build"
-# cmake.source-dir = "../.."
-# wheel.py-api = "cp313"
-# wheel.packages = ["pacer"]
+[tool.scikit-build]
+build.targets = ["_pacer"]
+build.verbose = true
+cmake.source-dir = "../.."
+wheel.packages = ["pacer"]
+install.components = ["pacer_bindings"]
+cmake.define = { CMAKE_OSX_DEPLOYMENT_TARGET = "13.3" }

@@ -1,6 +1,5 @@
 #include "gps-source.hpp"
 
-#include <__chrono/calendar.h>
 #include <chrono>
 #include <cstdint>
 #include <format>
@@ -9,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
+#include <vector>
 
 #include "GPMF_common.h"
 #include "GPMF_parser.h"
@@ -134,7 +134,7 @@ uint32_t GPMFSource::Samples(void *data,
 
     ret = GPMF_SeekToSamples(ms);
     if (ret != GPMF_OK) {
-      printf("No Seek to Samples\n");
+      // printf("No Seek to Samples\n");
       return ret;
     }
 
@@ -197,6 +197,7 @@ uint32_t GPMFSource::Samples(void *data,
 
     if (key == STR2FOURCC("GPS5")) {
       int64_t timestamp = 0;
+      std::vector<int64_t> gpsu_timestamps;
       GPMF_CopyState(ms, &gpsu_stream);
       if (GPMF_OK ==
           GPMF_FindPrev(&gpsu_stream, STR2FOURCC("GPSU"),
@@ -211,7 +212,10 @@ uint32_t GPMFSource::Samples(void *data,
         for (uint32_t k = 0; k < gpsu_size; k += 16) {
           GPSUData t;
           memcpy(t.data, gpsu_data + k, 16);
-          timestamp = t.Timestamp();
+          gpsu_timestamps.push_back(t.Timestamp());
+        }
+        if (!gpsu_timestamps.empty()) {
+          timestamp = gpsu_timestamps.back();
         }
       }
 

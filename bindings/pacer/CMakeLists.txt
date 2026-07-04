@@ -1,4 +1,4 @@
-litgen_find_nanobind()
+find_package(nanobind REQUIRED)
 
 add_custom_target(
     _generate_pacer_bindings
@@ -23,8 +23,10 @@ target_link_libraries(pacer INTERFACE
   pacer::laps-display
 )
 
+target_link_libraries(_pacer PRIVATE pacer)
+
 if (SKBUILD)
-  set(LITGEN_PATH_PACER "${CMAKE_INSTALL_PREFIX}" CACHE PATH "Path to install the pacer python module")
+  set(LITGEN_PATH_PACER "${CMAKE_INSTALL_PREFIX}/pacer" CACHE PATH "Path to install the pacer python module")
 else()
   set(LITGEN_PATH_PACER  "${CMAKE_SOURCE_DIR}/bindings/pacer" CACHE PATH "Path to install the pacer python module")
 endif()
@@ -45,3 +47,12 @@ add_dependencies(
     _pacer
     _generate_pacer_bindings
 )
+install(TARGETS _pacer DESTINATION pacer COMPONENT pacer_bindings)
+install(FILES pacer/__init__.py pacer/__init__.pyi DESTINATION pacer COMPONENT pacer_bindings)
+
+# Also copy the built module to the source tree for editable installs to work immediately
+if(SKBUILD)
+    add_custom_command(TARGET _pacer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:_pacer> ${CMAKE_CURRENT_SOURCE_DIR}/pacer
+    )
+endif()

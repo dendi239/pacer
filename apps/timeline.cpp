@@ -1,27 +1,14 @@
-// This file based on ImGui's demo app with ImPlot's demo sprinkled on top.
-// I'm gonna leave all boilerplate for now.
-
-// Dear ImGui: standalone example application for GLFW + OpenGL 3, using
-// programmable pipeline (GLFW is a cross-platform general purpose library for
-// handling windows, inputs, OpenGL/Vulkan/Metal graphics context creation,
-// etc.)
-
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/
-// folder).
-// - Introduction, links and more at the top of imgui.cpp
-
+#include "hello_imgui/docking_params.h"
+#include "hello_imgui/runner_callbacks.h"
+#include "hello_imgui/runner_params.h"
 #include <cstdio>
 #include <iostream>
 #include <sstream>
 
-#include "imgui.h"
-
-#include "implot.h"
-#include "implot_internal.h"
 #include <hello_imgui/hello_imgui.h>
+#include <imgui.h>
+#include <implot.h>
+#include <implot_internal.h>
 
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
@@ -214,6 +201,35 @@ void DisplayTelemetry(pacer::RawGPSSource &m, std::vector<GPSSample> &gps,
   ImGui::End();
 }
 
+void ShowMenu(HelloImGui::RunnerParams &runnerParams) {
+  if (ImGui::BeginMenu("My Menu")) {
+    bool clicked = ImGui::MenuItem("Test me", "F", false);
+    if (clicked) {
+      HelloImGui::Log(HelloImGui::LogLevel::Warning, "It works");
+    }
+    ImGui::EndMenu();
+  }
+  HelloImGui::ShowViewMenu(runnerParams);
+}
+
+HelloImGui::DockingParams DefaultLaout() {
+  HelloImGui::DockingParams result;
+  result.dockingSplits = {
+      HelloImGui::DockingSplit{"MainDockSpace", "Laps", ImGuiDir_Right, 0.5f},
+      HelloImGui::DockingSplit{"Laps", "Lap chart", ImGuiDir_Down, 0.7f},
+  };
+  result.dockableWindows = {
+      // HelloImGui::DockableWindow{"Laps22", "Laps",
+      //                            [](void) { ImGui::Text("Laps window"); }},
+      // HelloImGui::DockableWindow{"Lap chart22", "Lap chart",
+      //                            [](void) { ImGui::Text("Lap chart window");
+      //                            }},
+      // HelloImGui::DockableWindow{"Map22", "Map",
+      //                            [](void) { ImGui::Text("Map window"); }},
+  };
+  return result;
+}
+
 // Main code
 int main(int, char **) {
   pacer::Laps full_laps;
@@ -237,81 +253,135 @@ int main(int, char **) {
 
   auto implotContext = ImPlot::CreateContext();
 
-  HelloImGui::Run(
-      [&] {
-        laps.Update();
+  HelloImGui::RunnerParams runnerParams;
+  runnerParams.iniFolderType = HelloImGui::IniFolderType::TempFolder;
 
-        std::vector<GPSSample> gps;
-        static float start = 0, end = full_laps.PointCount();
+  runnerParams.appWindowParams.windowTitle = "Pacer";
+  runnerParams.imGuiWindowParams.menuAppTitle = "Pacer";
+  runnerParams.appWindowParams.windowGeometry.size = {1200, 1000};
+  runnerParams.appWindowParams.restorePreviousGeometry = true;
 
-        if (ImGui::Begin("Data Subset")) {
-          ImGui::Text("Select data subset to display on the map");
-          ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2);
-          if (ImGui::SliderFloat("Start", &start, 0, end) ||
-              (ImGui::SameLine(), ImGui::SliderFloat("End", &end, start,
-                                                     full_laps.PointCount()))) {
-            laps.ClearPoints();
-            for (size_t i = start; i < end; ++i) {
-              auto [gps, time] = full_laps.GetPoint(i);
-              laps.AddPoint(gps, time);
-            }
+  runnerParams.imGuiWindowParams.defaultImGuiWindowType =
+      HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
+  runnerParams.dockingParams = DefaultLaout();
+
+  runnerParams.imGuiWindowParams.showMenuBar = true;
+  runnerParams.imGuiWindowParams.showMenu_App = false;
+  runnerParams.imGuiWindowParams.showMenu_View = false;
+
+  runnerParams.callbacks.ShowMenus = [&]() { ShowMenu(runnerParams); };
+
+  auto gui_function = [&] {
+    laps.Update();
+
+    std::vector<GPSSample> gps;
+    static float start = 0, end = full_laps.PointCount();
+
+    if (ImGui::Begin("Data Subset")) {
+      ImGui::Text("Select data subset to display on the map");
+      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2);
+      if (ImGui::SliderFloat("Start", &start, 0, end) ||
+          (ImGui::SameLine(),
+           ImGui::SliderFloat("End", &end, start, full_laps.PointCount()))) {
+        laps.ClearPoints();
+        for (size_t i = start; i < end; ++i) {
+          auto [gps, time] = full_laps.GetPoint(i);
+          laps.AddPoint(gps, time);
+        }
+      }
+    }
+    ImGui::End();
+
+    delta.cs = laps_display.cs;
+    static int old_selected_lap = laps_display.selected_lap;
+    if (old_selected_lap != laps_display.selected_lap) {
+      float width = delta.reference_lap.width;
+      delta.reference_lap = laps.GetLap(laps_display.selected_lap);
+      delta.reference_lap.width = width;
+    }
+
+    if (ImGui::Begin("Map")) {
+      if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
+        laps_display.DisplayMap();
+        auto getter = [](int index, void *data) {
+          auto &[gps, ld] = *reinterpret_cast<
+              std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> *>(
+              data);
+          return ld.ToImPlotPoint(gps[index]);
+        };
+
+        std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> data = {
+            gps, laps_display};
+
+        ImPlot::PlotScatterG("data", getter, &data, (int)gps.size());
+
+        if (!gps.empty()) {
+          std::stringstream ss;
+          ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
+          auto point = laps_display.ToImPlotPoint(gps.back());
+          ImPlot::PlotText(ss.str().data(), point[0], point[1]);
+        }
+        delta.PlotSticks();
+        ImPlot::EndPlot();
+      }
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Laps")) {
+      delta.DrawSlider();
+      ImGui::SameLine();
+      laps_display.DisplayTable();
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Lap chart")) {
+      static float lap_cutoff = 107;
+      ImGui::SliderFloat("Cutoff", &lap_cutoff, 100, 125);
+
+      if (ImPlot::BeginPlot("Lap time chart", ImVec2(-1, -1),
+                            ImPlotFlags_NoTitle)) {
+        float best_lap = laps.LapTime(1);
+        for (size_t i = 0; i < laps.LapsCount(); ++i) {
+          if (best_lap > laps.LapTime(i) && laps.LapTime(i) > 1) {
+            best_lap = laps.LapTime(i);
           }
         }
-        ImGui::End();
 
-        delta.cs = laps_display.cs;
-        static int old_selected_lap = laps_display.selected_lap;
-        if (old_selected_lap != laps_display.selected_lap) {
-          float width = delta.reference_lap.width;
-          delta.reference_lap = laps.GetLap(laps_display.selected_lap);
-          delta.reference_lap.width = width;
-        }
+        std::tuple<pacer::Laps &, float, float &> data{laps, best_lap,
+                                                       lap_cutoff};
 
-        if (ImGui::Begin("Map")) {
-          if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
-            laps_display.DisplayMap();
-            auto getter = [](int index, void *data) {
-              auto &[gps, ld] = *reinterpret_cast<
-                  std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> *>(
+        auto getter = [](int index, void *data) {
+          auto &[laps, best, cutoff] =
+              *reinterpret_cast<std::tuple<pacer::Laps &, float, float &> *>(
                   data);
-              return ld.ToImPlotPoint(gps[index]);
-            };
+          auto lap = laps.GetLap(index);
+          float time = lap.LapTime();
+          if (time > cutoff * best / 100 || time < best)
+            time = NAN;
+          return ImPlotPoint((float)index, time);
+        };
 
-            std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> data = {
-                gps, laps_display};
+        ImPlot::PlotLineG("Lap Time", getter, &data, laps.LapsCount());
+        ImPlot::PlotScatterG("Lap Time", getter, &data, laps.LapsCount());
+        ImPlot::EndPlot();
+      }
+    }
+    ImGui::End();
 
-            ImPlot::PlotScatterG("data", getter, &data, (int)gps.size());
+    if (ImGui::Begin("Delta")) {
+      delta.Display(laps);
+    }
+    ImGui::End();
 
-            if (!gps.empty()) {
-              std::stringstream ss;
-              ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
-              auto point = laps_display.ToImPlotPoint(gps.back());
-              ImPlot::PlotText(ss.str().data(), point[0], point[1]);
-            }
-            delta.PlotSticks();
-            ImPlot::EndPlot();
-          }
-        }
-        ImGui::End();
+    if (ImGui::Begin("Lap Telemetry")) {
+      laps_display.DisplayLapTelemetry();
+    }
+    ImGui::End();
+  };
 
-        if (ImGui::Begin("Laps")) {
-          delta.DrawSlider();
-          ImGui::SameLine();
-          laps_display.DisplayTable();
-        }
-        ImGui::End();
+  runnerParams.callbacks.ShowGui = gui_function;
 
-        if (ImGui::Begin("Delta")) {
-          delta.Display(laps);
-        }
-        ImGui::End();
-
-        if (ImGui::Begin("Lap Telemetry")) {
-          laps_display.DisplayLapTelemetry();
-        }
-        ImGui::End();
-      },
-      "Pacer Timeline", true);
+  HelloImGui::Run(runnerParams);
 
   ImPlot::DestroyContext(implotContext);
 

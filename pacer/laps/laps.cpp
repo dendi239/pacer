@@ -1,5 +1,8 @@
 #include "laps.hpp"
 
+#include <cmath>
+#include <cstdio>
+
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
 
@@ -70,8 +73,15 @@ void pacer::Laps::Update() {
 }
 
 pacer::Segment pacer::Laps::PickRandomStart() const {
-  auto fst = points_[points_.size() / 2].point;
-  auto snd = points_[points_.size() / 2 + 20].point;
+  if (points_.empty())
+    return Segment{{0, 0}, {0, 0}};
+
+  // If we don't have enough samples to pick the +20 offset, clamp safely.
+  size_t mid = points_.size() / 2;
+  size_t snd_idx = std::min(points_.size() - 1, mid + (size_t)20);
+
+  auto fst = points_[mid].point;
+  auto snd = points_[snd_idx].point;
 
   auto s1 = cs_.Local(fst);
   auto s2 = cs_.Local(snd);
@@ -79,7 +89,11 @@ pacer::Segment pacer::Laps::PickRandomStart() const {
   auto p1 = Point{s1[0], s1[1]}, p2 = Point{s2[0], s2[1]};
   auto m = (p1 + p2) / 2, dir = (p2 - p1);
 
-  dir /= std::sqrt(dir.Norm());
+  double norm = std::sqrt(dir.Norm());
+  if (norm == 0.0)
+    return Segment{m, m};
+
+  dir /= norm;
   dir = Point{-dir[1], dir[0]};
 
   // offset start midpoint by 5m
@@ -87,8 +101,12 @@ pacer::Segment pacer::Laps::PickRandomStart() const {
 }
 
 auto pacer::Laps::MinMax() const -> std::pair<Point, Point> {
+  if (points_.empty())
+    return {Point{0, 0}, Point{0, 0}};
+
   Point min{points_[0].point.lon, points_[0].point.lat}, max = min;
-  for (auto [p, _] : points_) {
+  for (const auto &pit : points_) {
+    const auto &p = pit.point;
     min.x = std::min(min.x, p.lon);
     max.x = std::max(max.x, p.lon);
     min.y = std::min(min.y, p.lat);
@@ -101,6 +119,8 @@ double pacer::Laps::LapChunk::Time() const { return finish.time - start.time; }
 
 double pacer::Laps::GetLapDistance(size_t lap,
                                    const CoordinateSystem &cs) const {
+  if (lap >= laps_.size())
+    return 0.0;
   double distance = cs.Distance(laps_[lap].start.point,
                                 points_[laps_[lap].start_index].point) +
                     cs.Distance(laps_[lap].finish.point,
@@ -113,6 +133,8 @@ double pacer::Laps::GetLapDistance(size_t lap,
 
 pacer::PointInTime<pacer::GPSSample> pacer::Laps::At(size_t lap,
                                                      size_t row) const {
+  if (lap >= laps_.size())
+    return {};
   if (row == 0) {
     return laps_[lap].start;
   }
@@ -123,13 +145,15 @@ pacer::PointInTime<pacer::GPSSample> pacer::Laps::At(size_t lap,
 }
 
 double pacer::Laps::Speed(size_t lap, size_t row) const {
+  if (lap >= laps_.size())
+    return 0.0;
   return At(lap, row).point.full_speed;
 }
 
 double pacer::Laps::Distance(size_t lap, size_t row) const {
   double distance = 0;
 
-  if (row <= 0)
+  if (lap >= laps_.size() || row <= 0)
     return distance;
 
   distance += cs_.Distance(laps_[lap].start.point,
@@ -148,16 +172,22 @@ double pacer::Laps::Distance(size_t lap, size_t row) const {
   return distance;
 }
 
-double pacer::Laps::LapTime(size_t lap) const { return laps_[lap].Time(); }
+double pacer::Laps::LapTime(size_t lap) const {
+  if (lap >= laps_.size())
+    return 0.0;
+  return laps_[lap].Time();
+}
 
 size_t pacer::Laps::SampleCount(size_t lap) const {
-  if (lap > laps_.size()) {
+  if (lap >= laps_.size()) {
     return 0;
   }
   return laps_[lap].finish_index - laps_[lap].start_index + 3;
 }
 
 double pacer::Laps::StartTimestamp(size_t lap) const {
+  if (lap >= laps_.size())
+    return 0.0;
   return laps_[lap].start.time;
 }
 
@@ -188,6 +218,8 @@ double pacer::Laps::SectorTime(size_t sector) {
 size_t pacer::Laps::SectorCount() const { return sectors.sector_lines.size(); }
 
 double pacer::Laps::LapEntrySpeed(size_t lap) const {
+  if (lap >= laps_.size())
+    return 0.0;
   return laps_[lap].start.point.full_speed;
 }
 
@@ -211,7 +243,8 @@ pacer::PointInTime<pacer::GPSSample> pacer::Laps::GetPoint(size_t row) const {
 
 void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
   cs_ = coordinate_system;
-  cum_point_dist_[0] = 0;
+  // Ensure cum_point_dist_ has the same size as points_ and is initialized
+  cum_point_dist_.assign(points_.size(), 0.0);
   for (size_t i = 0; i + 1 < points_.size(); ++i) {
     cum_point_dist_[i + 1] =
         cum_point_dist_[i] +
@@ -236,10 +269,6 @@ pacer::Lap pacer::Lap::Resample(const Lap &lap,
     if (i_lap >= lap.points.size()) {
       break;
     }
-    auto s = Segment{
-        ToPoint(cs.Local(lap.points[i_lap - 1].point)),
-        ToPoint(cs.Local(lap.points[i_lap].point)),
-    };
     auto timing_line = TimingLine(i_timing_line, cs);
 
     while (i_lap < lap.points.size()) {
@@ -255,6 +284,7 @@ pacer::Lap pacer::Lap::Resample(const Lap &lap,
   }
 
   result.points.push_back(lap.points.back());
+  result.FillDistances(cs);
   return result;
 }
 
@@ -287,5 +317,7 @@ double pacer::Lap::LapTime() const {
 }
 void pacer::Laps::ClearPoints() {
   points_.clear();
-  cum_point_dist_.clear();
+  // keep a single zero entry so AddPoint and SetCoordinateSystem behave
+  // consistently (cum_point_dist_[0] == 0)
+  cum_point_dist_.assign(1, 0.0);
 }

@@ -25,10 +25,10 @@ imgui = ["*.so", "*.pyd", "**/*.pyi"]
 [tool.setuptools]
 packages = ["imgui"]
 
-# [tool.scikit-build]
-# build.targets = ["_imgui"]
-# build.verbose = true
-# build-dir = "../../build/scikit-build"
-# cmake.source-dir = "../.."
-# wheel.py-api = "cp313"
-# wheel.packages = ["imgui"]
+[tool.scikit-build]
+build.targets = ["_imgui"]
+build.verbose = true
+cmake.source-dir = "../.."
+wheel.packages = ["imgui"]
+install.components = ["imgui_bindings"]
+cmake.define = { CMAKE_OSX_DEPLOYMENT_TARGET = "13.3" }

@@ -11,6 +11,7 @@ struct Lap {
   float width;
 
   std::vector<PointInTime<GPSSample>> points;
+
   std::vector<double> cum_distances;
 
   void FillDistances(const CoordinateSystem &cs);
@@ -26,6 +27,7 @@ struct Lap {
 
 struct Sectors {
   Segment start_line;
+
   std::vector<Segment> sector_lines;
 };
 

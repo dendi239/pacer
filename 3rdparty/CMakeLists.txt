@@ -1,4 +1,10 @@
 ###############################################################################
+#                                hello_imgui                                  #
+###############################################################################
+
+add_subdirectory(hello_imgui)
+
+###############################################################################
 #                                   imgui                                     #
 ###############################################################################
 
@@ -9,8 +15,8 @@
 # file(GLOB IMGUI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/imgui/*.cpp)
 # add_library(imgui ${IMGUI_SRC})
 # target_include_directories(imgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
-# add_library(imgui::imgui ALIAS imgui)
 # set_property(TARGET imgui PROPERTY FOLDER "3rdparty")
+add_library(imgui::imgui ALIAS imgui)
 
 # add_library(imgui_glfw3
 #     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/imgui_impl_glfw.cpp
@@ -26,15 +32,14 @@
 #                                hello_imgui                                  #
 ###############################################################################
 
-add_subdirectory(hello_imgui)
 
 ###############################################################################
 #                                   implot                                    #
 ###############################################################################
 
 # ImPlot builds on top of imgui, so don't forget to link against respective backend.
-
 file(GLOB IMPLOT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/implot/*.cpp)
+list(REMOVE_ITEM IMPLOT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/implot/implot_demo.cpp)
 add_library(implot ${IMPLOT_SRC})
 target_include_directories(implot PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/implot)
 target_link_libraries(implot imgui)
@@ -57,7 +62,10 @@ set_property(TARGET gpmf PROPERTY FOLDER "3rdparty")
 add_library(gpmf::gpmf ALIAS gpmf)
 
 ###############################################################################
+###############################################################################
 #                                  nanobind                                   #
 ###############################################################################
 
-add_subdirectory(nanobind)
+if(NOT EMSCRIPTEN)
+    add_subdirectory(nanobind)
+endif()

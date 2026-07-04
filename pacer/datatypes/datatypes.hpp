@@ -22,10 +22,10 @@ template <class P> struct PointInTime {
 };
 
 inline std::ostream &operator<<(std::ostream &os, const GPSSample &s) {
-  return os << "GPS(lat: " << std::setprecision(4) << std::fixed << s.lat
-            << ", lon: " << s.lon << ", alt: " << s.altitude
-            << ", full: " << s.full_speed << ", ground: " << s.ground_speed
-            << ")";
+  return os << "GPS(t: " << s.timestamp_ms << ", lat: " << std::setprecision(4)
+            << std::fixed << s.lat << ", lon: " << s.lon
+            << ", alt: " << s.altitude << ", full: " << s.full_speed
+            << ", ground: " << s.ground_speed << ")";
 }
 
 struct Vec3f : public VectorOperators<Vec3f, double, 3> {

@@ -42,10 +42,14 @@ void pacer::LapsDisplay::DisplayMap() {
     });
     laps->SetCoordinateSystem(cs);
     laps->sectors.start_line = laps->PickRandomStart();
-    auto min_ =
-        cs.Local(GPSSample{.lon = bounds.first.x, .lat = bounds.first.y});
-    auto max_ =
-        cs.Local(GPSSample{.lon = bounds.second.x, .lat = bounds.second.y});
+    auto min_ = cs.Local(GPSSample{
+        .lat = bounds.first.y,
+        .lon = bounds.first.x,
+    });
+    auto max_ = cs.Local(GPSSample{
+        .lat = bounds.second.y,
+        .lon = bounds.second.x,
+    });
     bounds = {{min_[0], min_[1]}, {max_[0], max_[1]}};
 
     // ImPlot::SetupAxisLimits(ImAxis_X1, min_[0], max_[0]);
