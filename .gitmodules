@@ -13,3 +13,6 @@
 [submodule "3rdparty/hello_imgui"]
 	path = 3rdparty/hello_imgui
 	url = git@github.com:pthom/hello_imgui.git
+[submodule "3rdparty/nlohmann"]
+	path = 3rdparty/nlohmann
+	url = git@github.com:nlohmann/json.git
