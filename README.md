@@ -37,7 +37,13 @@ There're two good places to get started:
 Some components:
 
 - `pacer/`: bread and butter --- main library code, mixed C++ and Python stuff;
+  - `pacer/live-timing/`: incremental lap/delta engine shared by the desktop
+    simulator and the ESP32 firmware;
 - `apps/timeline.cpp`: main app: consists of bunch of different views on top of parsed data;
+- `apps/dashboard_sim.cpp`: replays a recorded session through the live-timing
+  engine and renders the in-kart dashboard on the desktop;
+- `firmware/`: ESP-IDF project for the in-kart ESP32-S3 dashboard (25Hz u-blox
+  GPS, ST7789 TFT, SD logging) --- see `firmware/README.md`;
 - `examples/`: bunch of examples of usage of 3rd party dependencies (e.g. implot, imgui, gpmf-parser);
 - `notebooks/`: me hacking stuff and never tyding it up;
 - `libs/`: parser for telemetry data, laps mangling, some geometry utilities;
