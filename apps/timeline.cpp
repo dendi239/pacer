@@ -235,9 +235,6 @@ int main(int, char **) {
             duration = 0;
           }
           current = 0;
-          if (laps.LapsCount() > 0) {
-            delta.reference_lap = laps.GetLap(laps_display.selected_lap);
-          }
         }
       }
       if (!load_message.empty()) {
@@ -265,9 +262,9 @@ int main(int, char **) {
     if (ImGui::Begin("Data Subset")) {
       ImGui::Text("Select data subset to display on the map");
       ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2);
-      if (ImGui::SliderFloat("Start", &start_p, 0, end_p) ||
+      if (ImGui::SliderFloat("Start", &start_p, 0, total_points) ||
           (ImGui::SameLine(),
-           ImGui::SliderFloat("End", &end_p, start_p, total_points))) {
+           ImGui::SliderFloat("End", &end_p, 0, total_points))) {
         start_p = std::clamp(start_p, 0.0f, total_points);
         end_p = std::clamp(end_p, start_p, total_points);
         laps.ClearPoints();
@@ -295,17 +292,6 @@ int main(int, char **) {
     if (ImGui::Begin("Map")) {
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
         laps_display.DisplayMap();
-        auto getter = [](int index, void *data) {
-          auto &[gps, ld] = *reinterpret_cast<
-              std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> *>(
-              data);
-          return ld.ToImPlotPoint(gps[index]);
-        };
-
-        std::pair<std::vector<GPSSample> &, pacer::LapsDisplay &> data = {
-            gps, laps_display};
-
-        ImPlot::PlotScatterG("data", getter, &data, (int)gps.size());
 
         if (!gps.empty()) {
           std::stringstream ss;
@@ -327,16 +313,9 @@ int main(int, char **) {
   lapsWindow.canBeClosed = false;
   lapsWindow.GuiFunction = [&]() {
     delta.cs = laps_display.cs;
-    static int old_selected_lap = laps_display.selected_lap;
-    if (old_selected_lap != laps_display.selected_lap) {
-      float width = delta.reference_lap.width;
-      delta.reference_lap = laps.GetLap(laps_display.selected_lap);
-      delta.reference_lap.width = width;
-      old_selected_lap = laps_display.selected_lap;
-    }
 
     if (ImGui::Begin("Laps")) {
-      delta.DrawSlider();
+      delta.DrawReferenceTrackLoader(laps);
       ImGui::SameLine();
       laps_display.DisplayTable();
     }
