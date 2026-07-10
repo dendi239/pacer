@@ -8,8 +8,8 @@
 namespace pacer {
 
 struct GPSSample {
-  double lat, lon, altitude, full_speed, ground_speed;
-  int64_t timestamp_ms;
+  double lat, lon, altitude = 0, full_speed = 0, ground_speed = 0;
+  int64_t timestamp_ms = 0;
 };
 
 template <class P> struct PointInTime {

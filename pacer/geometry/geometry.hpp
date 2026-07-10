@@ -4,14 +4,10 @@
 #include <optional>
 #include <utility>
 
-#include "implot.h"
-
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/datatypes/ops.hpp>
 
 namespace pacer {
-
-ImPlotPoint ToImPlotPoint(int index, void *data);
 
 struct Point : VectorOperators<Point, double, 2> {
   double x = 0, y = 0;
@@ -21,8 +17,6 @@ struct Point : VectorOperators<Point, double, 2> {
 
   double operator[](size_t index) const { return index ? y : x; }
   double &operator[](size_t index) { return index ? y : x; }
-
-  operator ImPlotPoint() { return {(*this)[0], (*this)[1]}; }
 
   Point Rot() const { return Point{-(*this)[1], (*this)[0]}; }
 

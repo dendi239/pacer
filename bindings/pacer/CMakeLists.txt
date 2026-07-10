@@ -19,6 +19,7 @@ target_link_libraries(pacer INTERFACE
   pacer::datatypes
   pacer::geometry
   pacer::laps
+  pacer::reference-track
   pacer::gps-source
   pacer::laps-display
 )

@@ -61,9 +61,6 @@ class Vec3f:
 
 ####################    <generated_from:geometry.hpp>    ####################
 
-def to_im_plot_point(index: int, data: Any) -> ImPlotPoint:
-    pass
-
 class Point:
     x: float = 0
     y: float = 0
@@ -188,8 +185,6 @@ def interpolate(from_: GPSSample, to: GPSSample, ratio: float) -> GPSSample:
 ####################    <generated_from:laps.hpp>    ####################
 
 class Lap:
-    width: float
-
     points: List[PointInTime[GPSSample]]
 
     cum_distances: List[float]
@@ -203,18 +198,8 @@ class Lap:
     def count(self) -> int:
         pass
 
-    def resample(self, lap: Lap, cs: CoordinateSystem) -> Lap:
-        pass
-
-    def timing_lines_count(self) -> int:
-        pass
-
-    def timing_line(self, index: int, cs: CoordinateSystem) -> Segment:
-        pass
-
     def __init__(
         self,
-        width: float = float(),
         points: List[PointInTime[GPSSample]] = List[PointInTime < GPSSample] > (),
         cum_distances: List[float] = List[float](),
     ) -> None:
@@ -325,6 +310,102 @@ class Laps:
 
 ####################    </generated_from:laps.hpp>    ####################
 
+####################    <generated_from:reference-track.hpp>    ####################
+
+class ReferenceTrack:
+    """A hand-annotated (or synthesized) sequence of timing-line gates used to
+    project driven laps onto a common set of cross-sections for delta
+    calculation. Geometry is stored in local coordinates relative to `cs`, so
+    it stays internally consistent regardless of any other CoordinateSystem in
+    use elsewhere (e.g. for map display).
+    """
+
+    cs: CoordinateSystem
+    segments: List[Segment]
+    sector_indices: List[int]  # ordered indices into segments
+
+    def count(self) -> int:
+        pass
+
+    def timing_lines_count(self) -> int:
+        pass
+
+    def timing_line(self, index: int) -> Segment:
+        """/ Returns segments[index] extended a couple of meters past each edge, so
+        / the gate still catches a driven lap that strays slightly outside the
+        / annotated track boundary.
+        """
+        pass
+
+    def densified_gates(self) -> List[Segment]:
+        """/ All TimingLine()s densified to roughly one synthetic gate per meter
+        / (linearly interpolated between each annotated pair), in this track's
+        / local frame. Gate 0 is the start/finish line. Both Resample() and the
+        / live-timing engine consume laps through this same gate sequence, so
+        / their deltas agree.
+        """
+        pass
+
+    def to_global(self, local: Segment) -> Segment:
+        """/ Converts a local-frame segment to raw lon/lat Points, i.e. the frame
+        / pacer::Split() expects when intersecting against raw GPSSample points.
+        """
+        pass
+
+    def resample(self, lap: Lap) -> Lap:
+        """/ Projects `lap` onto this track's timing lines, producing a Lap whose
+        / points align (index-for-index) with any other lap resampled against the
+        / same ReferenceTrack. Internally, consecutive gates are densified to
+        / roughly one synthetic gate per meter (linearly interpolated between
+        / each pair) so widely-spaced hand-drawn gates, e.g. down a straight,
+        / don't produce a jittery delta.
+        """
+        pass
+
+    @staticmethod
+    def from_lap(lap: Lap, width: float, cs: CoordinateSystem) -> ReferenceTrack:
+        """/ Builds a ReferenceTrack the old way: a perpendicular offset of `width`
+        / meters at every interior point of `lap`. Useful when there is no
+        / hand-annotated track, only a recorded lap to use as a stand-in.
+        """
+        pass
+
+    @staticmethod
+    def from_file(filename: str) -> ReferenceTrack:
+        """/ Loads a reference track from the JSON schema written by
+        / track_annotator ({"segments": [[[lat,lon],[lat,lon]], ...]}).
+        / Throws std::runtime_error on failure.
+        """
+        pass
+
+    def save_to_file(self, filename: str) -> None:
+        """/ Writes this track using the same JSON schema. Throws
+        / std::runtime_error on failure.
+        """
+        pass
+
+    def build_sectors(self, target_cs: CoordinateSystem) -> Sectors:
+        """/ Builds a pacer::Sectors using segments[0] as the start/finish line and
+        / sector_indices (in order) as sector splits, converting from this
+        / track's local frame into target_cs (the frame the consuming Laps
+        / object uses). Returns a default (empty) Sectors if segments is empty.
+        / Uses the raw annotated segments, not the TimingLine-extended ones —
+        / the gate extension is a delta-calculation robustness hack, not
+        / something that should silently move where a lap/sector splits.
+        """
+        pass
+
+    def __init__(
+        self,
+        cs: CoordinateSystem = CoordinateSystem(),
+        segments: List[Segment] = List[Segment](),
+        sector_indices: List[int] = List[int](),
+    ) -> None:
+        """Auto-generated default constructor with named params"""
+        pass
+
+####################    </generated_from:reference-track.hpp>    ####################
+
 ####################    <generated_from:gps-source.hpp>    ####################
 
 class RawGPSSource:
@@ -426,6 +507,13 @@ class DatVersion(enum.IntEnum):
 
 ####################    <generated_from:laps-display.hpp>    ####################
 
+def to_im_plot_point(index: int, data: Any) -> ImPlotPoint:
+    """/ ImPlot getter over a raw GPSSample array (lon/lat). Lived in
+    / pacer::geometry before; moved here so the core geometry library has no
+    / implot dependency and can be compiled for embedded targets.
+    """
+    pass
+
 class LapsDisplay:
     laps: Laps
     selected_lap: int = -1
@@ -455,13 +543,16 @@ class LapsDisplay:
         pass
 
 class DeltaLapsComparision:
-    reference_lap: Lap
+    reference_track: ReferenceTrack
     cs: CoordinateSystem
+
+    reference_track_filename: str = "track_annotation.json"
+    reference_track_status: str
 
     def plot_sticks(self) -> None:
         pass
 
-    def draw_slider(self) -> None:
+    def draw_reference_track_loader(self, laps: Laps) -> None:
         pass
     selected_laps: std.unordered_set[int] = (
         std.unordered_set < int > ()
@@ -472,8 +563,10 @@ class DeltaLapsComparision:
 
     def __init__(
         self,
-        reference_lap: Lap = Lap(),
+        reference_track: ReferenceTrack = ReferenceTrack(),
         cs: CoordinateSystem = CoordinateSystem(),
+        reference_track_filename: str = "track_annotation.json",
+        reference_track_status: str = "",
         selected_laps: std.unordered_set[int] = std.unordered_set < int > (),
     ) -> None:
         """Auto-generated default constructor with named params"""

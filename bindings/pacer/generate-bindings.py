@@ -116,6 +116,7 @@ def autogenerate() -> None:
         repository_dir / "pacer/datatypes/datatypes.hpp",
         repository_dir / "pacer/geometry/geometry.hpp",
         repository_dir / "pacer/laps/laps.hpp",
+        repository_dir / "pacer/reference-track/reference-track.hpp",
         repository_dir / "pacer/gps-source/gps-source.hpp",
         repository_dir / "pacer/laps-display/laps-display.hpp",
     ]
@@ -147,7 +148,8 @@ def post_process(filepath: Path) -> None:
     # We should probably be specific about the types we care about: Point, Segment, Lap, Sectors, CoordinateSystem
     
     types_to_fix = [
-        "Point", "Segment", "Lap", "Sectors", "CoordinateSystem", "GPSSample", "Vec3f", "PointInTime<GPSSample>"
+        "Point", "Segment", "Lap", "Sectors", "CoordinateSystem", "GPSSample", "Vec3f", "PointInTime<GPSSample>",
+        "ReferenceTrack",
     ]
     
     for t in types_to_fix:

@@ -1,12 +1,19 @@
 #pragma once
 
+#include <string>
 #include <unordered_set>
 
 #include "implot.h"
 
 #include <pacer/laps/laps.hpp>
+#include <pacer/reference-track/reference-track.hpp>
 
 namespace pacer {
+
+/// ImPlot getter over a raw GPSSample array (lon/lat). Lived in
+/// pacer::geometry before; moved here so the core geometry library has no
+/// implot dependency and can be compiled for embedded targets.
+ImPlotPoint ToImPlotPoint(int index, void *data);
 
 struct LapsDisplay {
   Laps *laps;
@@ -28,11 +35,14 @@ struct LapsDisplay {
 };
 
 struct DeltaLapsComparision {
-  Lap reference_lap;
+  ReferenceTrack reference_track;
   CoordinateSystem cs;
 
+  std::string reference_track_filename = "track_annotation.json";
+  std::string reference_track_status;
+
   void PlotSticks();
-  void DrawSlider();
+  void DrawReferenceTrackLoader(Laps &laps);
 
   std::unordered_set<int> selected_laps = {}; //{19, 24, 28, 35, 36};
 

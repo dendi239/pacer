@@ -1,13 +1,9 @@
 #include "geometry.hpp"
 
+#include <cassert>
 #include <cmath>
 
 #include <pacer/datatypes/datatypes.hpp>
-
-ImPlotPoint pacer::ToImPlotPoint(int index, void *data) {
-  GPSSample *data_ = reinterpret_cast<GPSSample *>(data);
-  return ImPlotPoint(data_[index].lon, data_[index].lat);
-}
 
 bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
   Point n = (snd - fst).Rot();

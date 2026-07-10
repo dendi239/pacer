@@ -120,17 +120,19 @@ template <typename Concrete, typename T, size_t N> struct PointwiseOperators {
 template <typename Concrete, typename T, size_t N>
 struct VectorOperators : LinearOperators<Concrete, T, N>,
                          PointwiseOperators<Concrete, T, N> {
+  // Fully qualified base names: GCC (unlike clang) rejects the bare
+  // injected-class-name here in a dependent context.
   Concrete &operator*=(T scalar) {
-    return static_cast<Concrete *>(this)->LinearOperators::operator*=(scalar);
+    return LinearOperators<Concrete, T, N>::operator*=(scalar);
   }
   Concrete &operator*=(const Concrete &other) {
-    return static_cast<Concrete *>(this)->PointwiseOperators::operator*=(other);
+    return PointwiseOperators<Concrete, T, N>::operator*=(other);
   }
   Concrete &operator/=(T scalar) {
-    return static_cast<Concrete *>(this)->LinearOperators::operator/=(scalar);
+    return LinearOperators<Concrete, T, N>::operator/=(scalar);
   }
   Concrete &operator/=(const Concrete &other) {
-    return static_cast<Concrete *>(this)->PointwiseOperators::operator/=(other);
+    return PointwiseOperators<Concrete, T, N>::operator/=(other);
   }
 };
 

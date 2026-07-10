@@ -6,10 +6,16 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "imgui_stdlib.h"
 #include "implot.h"
 #include "implot_internal.h"
 
 #include <pacer/datatypes/datatypes.hpp>
+
+ImPlotPoint pacer::ToImPlotPoint(int index, void *data) {
+  GPSSample *data_ = reinterpret_cast<GPSSample *>(data);
+  return ImPlotPoint(data_[index].lon, data_[index].lat);
+}
 
 ImPlotPoint pacer::LapsDisplay::ToImPlotPoint(GPSSample s) const {
   auto p = cs.Local(s);
@@ -20,7 +26,8 @@ void pacer::LapsDisplay::DragTimingLine(Segment *s, const char *name,
                                         int drag_id) {
   auto get_point = [](int index, void *data) -> ImPlotPoint {
     auto &s = *reinterpret_cast<Segment *>(data);
-    return index ? s.second : s.first;
+    const Point &p = index ? s.second : s.first;
+    return {p.x, p.y};
   };
 
   ImPlot::PlotLineG(name, get_point, s, 2, 0);
@@ -208,38 +215,52 @@ bool pacer::LapsDisplay::DisplayTable() {
   ImGui::EndTable();
   return true;
 }
-ImPlotPoint SampleToPoint(int index, void *data) {
-  auto &s = *reinterpret_cast<pacer::DeltaLapsComparision *>(data);
-  auto p = s.cs.Local(s.reference_lap.points[index].point);
-  return {p[0], p[1]};
-}
 ImPlotPoint Vec3fToPoint(int index, void *data) {
   auto s = reinterpret_cast<pacer::Vec3f *>(data)[index];
   return {s[0], s[1]};
 }
 
-void pacer::DeltaLapsComparision::DrawSlider() {
-  ImGui::SliderFloat("Width", &reference_lap.width, 0, 10);
+void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(Laps &laps) {
+  ImGui::SetNextItemWidth(200.0f);
+  ImGui::InputText("Reference track file", &reference_track_filename);
+  ImGui::SameLine();
+  if (ImGui::Button("Load reference track")) {
+    try {
+      reference_track = ReferenceTrack::FromFile(reference_track_filename);
+      reference_track_status = "Loaded " +
+                               std::to_string(reference_track.segments.size()) +
+                               " segments";
+      if (!reference_track.segments.empty()) {
+        laps.sectors = reference_track.BuildSectors(cs);
+        reference_track_status +=
+            reference_track.sector_indices.empty()
+                ? " (no sectors marked)."
+                : " (" + std::to_string(reference_track.sector_indices.size()) +
+                      " sectors).";
+      } else {
+        reference_track_status += ".";
+      }
+    } catch (const std::exception &e) {
+      reference_track_status = std::string("Error: ") + e.what();
+    }
+  }
+  if (!reference_track_status.empty()) {
+    ImGui::TextWrapped("%s", reference_track_status.c_str());
+  }
 }
 
 void pacer::DeltaLapsComparision::PlotSticks() {
-  for (size_t i = 1; i + 1 < reference_lap.Count(); ++i) {
-    Vec3f prev = cs.Local(reference_lap.points[i - 1].point),
-          curr = cs.Local(reference_lap.points[i].point),
-          next = cs.Local(reference_lap.points[i + 1].point);
-
-    Vec3f dir = (next - prev);
-    dir /= std::sqrt(dir.Norm());
-    Vec3f norm = Vec3f{dir[1], -dir[0], 0};
-    Vec3f line[2] = {curr - norm * reference_lap.width,
-                     curr + norm * reference_lap.width};
+  for (const auto &seg : reference_track.segments) {
+    auto a = reference_track.cs.Global(Vec3f{seg.first.x, seg.first.y, 0});
+    auto b = reference_track.cs.Global(Vec3f{seg.second.x, seg.second.y, 0});
+    Vec3f line[2] = {cs.Local(a), cs.Local(b)};
     ImPlot::PlotLineG("", Vec3fToPoint, line, 2);
   }
 }
 
 // std::optional<float>
 void pacer::DeltaLapsComparision::Display(const Laps &laps) {
-  if (reference_lap.points.size() < 1) {
+  if (reference_track.segments.empty()) {
     return;
   }
 
@@ -266,7 +287,7 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
       ImPlot::SetupAxis(ImAxis_X1, "", ImPlotAxisFlags_NoTickLabels);
 
       for (auto lap_id : selected_laps) {
-        auto lap = reference_lap.Resample(laps.GetLap(lap_id), cs);
+        auto lap = reference_track.Resample(laps.GetLap(lap_id));
         resampled_laps[lap_id] = lap;
         auto data = std::pair{lap, lap_id};
 

@@ -128,9 +128,6 @@ void py_init_module_pacer(nb::module_ &m) {
   ////////////////////    </generated_from:datatypes.hpp> ////////////////////
 
   ////////////////////    <generated_from:geometry.hpp>    ////////////////////
-  m.def("to_im_plot_point", pacer::ToImPlotPoint, nb::arg("index"),
-        nb::arg("data"));
-
   auto pyClassPoint =
       nb::class_<pacer::Point>(m, "Point", "")
           .def_rw("x", &pacer::Point::x, "")
@@ -200,29 +197,22 @@ void py_init_module_pacer(nb::module_ &m) {
       nb::class_<pacer::Lap>(m, "Lap", "")
           .def(
               "__init__",
-              [](pacer::Lap *self, float width = float(),
+              [](pacer::Lap *self,
                  std::vector<PointInTime<GPSSample>> points =
                      std::vector<PointInTime<GPSSample>>(),
                  std::vector<double> cum_distances = std::vector<double>()) {
                 new (self) pacer::Lap(); // placement new
                 auto r_ctor_ = self;
-                r_ctor_->width = width;
                 r_ctor_->points = points;
                 r_ctor_->cum_distances = cum_distances;
               },
-              nb::arg("width") = float(),
               nb::arg("points") = std::vector<PointInTime<GPSSample>>(),
               nb::arg("cum_distances") = std::vector<double>())
-          .def_rw("width", &pacer::Lap::width, "")
           .def_rw("points", &pacer::Lap::points, "")
           .def_rw("cum_distances", &pacer::Lap::cum_distances, "")
           .def("fill_distances", &pacer::Lap::FillDistances, nb::arg("cs"))
           .def("lap_time", &pacer::Lap::LapTime)
-          .def("count", &pacer::Lap::Count)
-          .def("resample", &pacer::Lap::Resample, nb::arg("lap"), nb::arg("cs"))
-          .def("timing_lines_count", &pacer::Lap::TimingLinesCount)
-          .def("timing_line", &pacer::Lap::TimingLine, nb::arg("index"),
-               nb::arg("cs"));
+          .def("count", &pacer::Lap::Count);
 
   auto pyClassSectors =
       nb::class_<pacer::Sectors>(m, "Sectors", "")
@@ -287,6 +277,92 @@ void py_init_module_pacer(nb::module_ &m) {
           .def("clear_points", &pacer::Laps::ClearPoints);
   ////////////////////    </generated_from:laps.hpp>    ////////////////////
 
+  ////////////////////    <generated_from:reference-track.hpp>
+  ///////////////////////
+  auto pyClassReferenceTrack =
+      nb::class_<pacer::ReferenceTrack>(
+          m, "ReferenceTrack",
+          " A hand-annotated (or synthesized) sequence of timing-line gates "
+          "used to\n project driven laps onto a common set of cross-sections "
+          "for delta\n calculation. Geometry is stored in local coordinates "
+          "relative to `cs`, so\n it stays internally consistent regardless of "
+          "any other CoordinateSystem in\n use elsewhere (e.g. for map "
+          "display).")
+          .def(
+              "__init__",
+              [](pacer::ReferenceTrack *self,
+                 CoordinateSystem cs = CoordinateSystem(),
+                 std::vector<Segment> segments = std::vector<Segment>(),
+                 std::vector<int> sector_indices = std::vector<int>()) {
+                new (self) pacer::ReferenceTrack(); // placement new
+                auto r_ctor_ = self;
+                r_ctor_->cs = cs;
+                r_ctor_->segments = segments;
+                r_ctor_->sector_indices = sector_indices;
+              },
+              nb::arg("cs") = CoordinateSystem(),
+              nb::arg("segments") = std::vector<Segment>(),
+              nb::arg("sector_indices") = std::vector<int>())
+          .def_rw("cs", &pacer::ReferenceTrack::cs, "")
+          .def_rw("segments", &pacer::ReferenceTrack::segments, "")
+          .def_rw("sector_indices", &pacer::ReferenceTrack::sector_indices,
+                  "ordered indices into segments")
+          .def("count", &pacer::ReferenceTrack::Count)
+          .def("timing_lines_count", &pacer::ReferenceTrack::TimingLinesCount)
+          .def("timing_line", &pacer::ReferenceTrack::TimingLine,
+               nb::arg("index"),
+               "/ Returns segments[index] extended a couple of meters past "
+               "each edge, so\n/ the gate still catches a driven lap that "
+               "strays slightly outside the\n/ annotated track boundary.")
+          .def(
+              "densified_gates", &pacer::ReferenceTrack::DensifiedGates,
+              "/ All TimingLine()s densified to roughly one synthetic gate per "
+              "meter\n/ (linearly interpolated between each annotated pair), "
+              "in this track's\n/ local frame. Gate 0 is the start/finish "
+              "line. Both Resample() and the\n/ live-timing engine consume "
+              "laps through this same gate sequence, so\n/ their deltas agree.")
+          .def("to_global", &pacer::ReferenceTrack::ToGlobal, nb::arg("local"),
+               "/ Converts a local-frame segment to raw lon/lat Points, i.e. "
+               "the frame\n/ pacer::Split() expects when intersecting against "
+               "raw GPSSample points.")
+          .def("resample", &pacer::ReferenceTrack::Resample, nb::arg("lap"),
+               "/ Projects `lap` onto this track's timing lines, producing a "
+               "Lap whose\n/ points align (index-for-index) with any other lap "
+               "resampled against the\n/ same ReferenceTrack. Internally, "
+               "consecutive gates are densified to\n/ roughly one synthetic "
+               "gate per meter (linearly interpolated between\n/ each pair) so "
+               "widely-spaced hand-drawn gates, e.g. down a straight,\n/ don't "
+               "produce a jittery delta.")
+          .def_static("from_lap", &pacer::ReferenceTrack::FromLap,
+                      nb::arg("lap"), nb::arg("width"), nb::arg("cs"),
+                      "/ Builds a ReferenceTrack the old way: a perpendicular "
+                      "offset of `width`\n/ meters at every interior point of "
+                      "`lap`. Useful when there is no\n/ hand-annotated track, "
+                      "only a recorded lap to use as a stand-in.")
+          .def_static(
+              "from_file", &pacer::ReferenceTrack::FromFile,
+              nb::arg("filename"),
+              "/ Loads a reference track from the JSON schema written by\n/ "
+              "track_annotator ({\"segments\": [[[lat,lon],[lat,lon]], "
+              "...]}).\n/ Throws std::runtime_error on failure.")
+          .def("save_to_file", &pacer::ReferenceTrack::SaveToFile,
+               nb::arg("filename"),
+               "/ Writes this track using the same JSON schema. Throws\n/ "
+               "std::runtime_error on failure.")
+          .def(
+              "build_sectors", &pacer::ReferenceTrack::BuildSectors,
+              nb::arg("target_cs"),
+              "/ Builds a pacer::Sectors using segments[0] as the start/finish "
+              "line and\n/ sector_indices (in order) as sector splits, "
+              "converting from this\n/ track's local frame into target_cs (the "
+              "frame the consuming Laps\n/ object uses). Returns a default "
+              "(empty) Sectors if segments is empty.\n/ Uses the raw annotated "
+              "segments, not the TimingLine-extended ones —\n/ the gate "
+              "extension is a delta-calculation robustness hack, not\n/ "
+              "something that should silently move where a lap/sector splits.");
+  ////////////////////    </generated_from:reference-track.hpp>
+  ///////////////////////
+
   ////////////////////    <generated_from:gps-source.hpp> ////////////////////
   auto pyClassRawGPSSource =
       nb::class_<pacer::RawGPSSource, pacer::RawGPSSource_trampoline>(
@@ -349,6 +425,12 @@ void py_init_module_pacer(nb::module_ &m) {
   ////////////////////    </generated_from:gps-source.hpp> ////////////////////
 
   ////////////////////    <generated_from:laps-display.hpp> ////////////////////
+  m.def("to_im_plot_point", pacer::ToImPlotPoint, nb::arg("index"),
+        nb::arg("data"),
+        "/ ImPlot getter over a raw GPSSample array (lon/lat). Lived in\n/ "
+        "pacer::geometry before; moved here so the core geometry library has "
+        "no\n/ implot dependency and can be compiled for embedded targets.");
+
   auto pyClassLapsDisplay =
       nb::class_<pacer::LapsDisplay>(m, "LapsDisplay", "")
           .def(
@@ -378,23 +460,36 @@ void py_init_module_pacer(nb::module_ &m) {
       nb::class_<pacer::DeltaLapsComparision>(m, "DeltaLapsComparision", "")
           .def(
               "__init__",
-              [](pacer::DeltaLapsComparision *self, Lap reference_lap = Lap(),
+              [](pacer::DeltaLapsComparision *self,
+                 ReferenceTrack reference_track = ReferenceTrack(),
                  CoordinateSystem cs = CoordinateSystem(),
+                 std::string reference_track_filename = "track_annotation.json",
+                 std::string reference_track_status = std::string(),
                  std::unordered_set<int> selected_laps = {}) {
                 new (self) pacer::DeltaLapsComparision(); // placement new
                 auto r_ctor_ = self;
-                r_ctor_->reference_lap = reference_lap;
+                r_ctor_->reference_track = reference_track;
                 r_ctor_->cs = cs;
+                r_ctor_->reference_track_filename = reference_track_filename;
+                r_ctor_->reference_track_status = reference_track_status;
                 r_ctor_->selected_laps = selected_laps;
               },
-              nb::arg("reference_lap") = Lap(),
+              nb::arg("reference_track") = ReferenceTrack(),
               nb::arg("cs") = CoordinateSystem(),
+              nb::arg("reference_track_filename") = "track_annotation.json",
+              nb::arg("reference_track_status") = std::string(),
               nb::arg("selected_laps") = std::unordered_set<int>{})
-          .def_rw("reference_lap", &pacer::DeltaLapsComparision::reference_lap,
-                  "")
+          .def_rw("reference_track",
+                  &pacer::DeltaLapsComparision::reference_track, "")
           .def_rw("cs", &pacer::DeltaLapsComparision::cs, "")
+          .def_rw("reference_track_filename",
+                  &pacer::DeltaLapsComparision::reference_track_filename, "")
+          .def_rw("reference_track_status",
+                  &pacer::DeltaLapsComparision::reference_track_status, "")
           .def("plot_sticks", &pacer::DeltaLapsComparision::PlotSticks)
-          .def("draw_slider", &pacer::DeltaLapsComparision::DrawSlider)
+          .def("draw_reference_track_loader",
+               &pacer::DeltaLapsComparision::DrawReferenceTrackLoader,
+               nb::arg("laps"))
           .def_rw("selected_laps", &pacer::DeltaLapsComparision::selected_laps,
                   "{19, 24, 28, 35, 36};")
           .def("display", &pacer::DeltaLapsComparision::Display,

@@ -198,7 +198,7 @@ pacer::Lap pacer::Laps::GetLap(size_t lap) const {
   points.insert(points.end(), points_.begin() + laps_[lap].start_index,
                 points_.begin() + laps_[lap].finish_index);
   points.push_back(laps_[lap].finish);
-  auto l = Lap{.points = points};
+  auto l = Lap{.points = points, .cum_distances = {}};
   l.FillDistances(cs_);
   return l;
 }
@@ -254,56 +254,6 @@ void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
 size_t pacer::Laps::RecordedSectors() const { return sectors_.size(); }
 
 size_t pacer::Lap::Count() const { return points.size(); }
-
-pacer::Lap pacer::Lap::Resample(const Lap &lap,
-                                const CoordinateSystem &cs) const {
-  if (lap.points.empty()) {
-    return lap;
-  }
-  Lap result{.width = lap.width,
-             .points = {lap.points.front()},
-             .cum_distances = cum_distances};
-
-  for (size_t i_timing_line = 0, i_lap = 1; i_timing_line < TimingLinesCount();
-       ++i_timing_line) {
-    if (i_lap >= lap.points.size()) {
-      break;
-    }
-    auto timing_line = TimingLine(i_timing_line, cs);
-
-    while (i_lap < lap.points.size()) {
-      auto split_point =
-          pacer::Split(timing_line, lap.points[i_lap - 1], lap.points[i_lap]);
-      if (split_point) {
-        result.points.push_back(*split_point);
-        break;
-      }
-
-      ++i_lap;
-    }
-  }
-
-  result.points.push_back(lap.points.back());
-  result.FillDistances(cs);
-  return result;
-}
-
-size_t pacer::Lap::TimingLinesCount() const { return points.size() - 2; }
-
-pacer::Segment pacer::Lap::TimingLine(size_t i,
-                                      const CoordinateSystem &cs) const {
-
-  i += 1;
-  Vec3f prev = cs.Local(points[i - 1].point), curr = cs.Local(points[i].point),
-        next = cs.Local(points[i + 1].point);
-
-  Vec3f dir = (next - prev);
-  dir /= std::sqrt(dir.Norm());
-  Vec3f norm = Vec3f{dir[1], -dir[0], 0};
-
-  return Segment{ToPoint(cs.Global(curr - norm * width)),
-                 ToPoint(cs.Global(curr + norm * width))};
-}
 
 void pacer::Lap::FillDistances(const CoordinateSystem &cs) {
   cum_distances = std::vector<double>{0};
