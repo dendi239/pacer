@@ -101,19 +101,13 @@ GPSSample Interpolate(GPSSample from, GPSSample to, double ratio);
 //                                static_cast<const Concrete &>(to) * ratio);
 // }
 
-template <class P>
-std::optional<PointInTime<P>> Split(Segment start_line, PointInTime<P> first,
-                                    PointInTime<P> second) {
-
+inline std::optional<GPSSample> Split(Segment start_line, GPSSample first,
+                                      GPSSample second) {
   double ratio = 0.;
-  if (!start_line.Intersects(ToPoint(first.point), ToPoint(second.point),
-                             &ratio)) {
+  if (!start_line.Intersects(ToPoint(first), ToPoint(second), &ratio)) {
     return std::nullopt;
   }
 
-  return PointInTime{
-      .point = Interpolate(first.point, second.point, ratio),
-      .time = first.time * (1 - ratio) + ratio * second.time,
-  };
+  return Interpolate(first, second, ratio);
 }
 } // namespace pacer

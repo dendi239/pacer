@@ -8,7 +8,7 @@
 namespace pacer {
 
 struct Lap {
-  std::vector<PointInTime<GPSSample>> points;
+  std::vector<GPSSample> points;
 
   std::vector<double> cum_distances;
 
@@ -50,7 +50,7 @@ struct Laps {
   double LapTime(size_t lap) const;
   size_t SampleCount(size_t lap) const;
   double StartTimestamp(size_t lap) const;
-  PointInTime<GPSSample> At(size_t lap, size_t row) const;
+  GPSSample At(size_t lap, size_t row) const;
   double Speed(size_t lap, size_t row) const;
   double Distance(size_t lap, size_t row) const;
   double GetLapDistance(size_t index, const CoordinateSystem &cs) const;
@@ -68,14 +68,14 @@ struct Laps {
 
   //------------------------------ RAW POINTS -------------------------------//
 
-  void AddPoint(GPSSample s, double t);
+  void AddPoint(GPSSample s);
   size_t PointCount() const;
-  PointInTime<GPSSample> GetPoint(size_t row) const;
+  GPSSample GetPoint(size_t row) const;
   void ClearPoints();
 
 private:
   struct LapChunk {
-    PointInTime<GPSSample> start, finish;
+    GPSSample start, finish;
     size_t start_index, finish_index;
 
     double Time() const;
@@ -84,7 +84,7 @@ private:
 
   CoordinateSystem cs_;
 
-  std::vector<PointInTime<GPSSample>> points_;
+  std::vector<GPSSample> points_;
   std::vector<double> cum_point_dist_{0};
 
   std::vector<LapChunk> laps_;

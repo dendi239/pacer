@@ -73,9 +73,9 @@ void py_init_module_pacer(nb::module_ &m) {
           .def(
               "__init__",
               [](pacer::GPSSample *self, double lat = double(),
-                 double lon = double(), double altitude = double(),
-                 double full_speed = double(), double ground_speed = double(),
-                 int64_t timestamp_ms = int64_t()) {
+                 double lon = double(), double altitude = 0,
+                 double full_speed = 0, double ground_speed = 0,
+                 int64_t timestamp_ms = 0) {
                 new (self) pacer::GPSSample(); // placement new
                 auto r_ctor_ = self;
                 r_ctor_->lat = lat;
@@ -86,30 +86,14 @@ void py_init_module_pacer(nb::module_ &m) {
                 r_ctor_->timestamp_ms = timestamp_ms;
               },
               nb::arg("lat") = double(), nb::arg("lon") = double(),
-              nb::arg("altitude") = double(), nb::arg("full_speed") = double(),
-              nb::arg("ground_speed") = double(),
-              nb::arg("timestamp_ms") = int64_t())
+              nb::arg("altitude") = 0, nb::arg("full_speed") = 0,
+              nb::arg("ground_speed") = 0, nb::arg("timestamp_ms") = 0)
           .def_rw("lat", &pacer::GPSSample::lat, "")
           .def_rw("lon", &pacer::GPSSample::lon, "")
           .def_rw("altitude", &pacer::GPSSample::altitude, "")
           .def_rw("full_speed", &pacer::GPSSample::full_speed, "")
           .def_rw("ground_speed", &pacer::GPSSample::ground_speed, "")
           .def_rw("timestamp_ms", &pacer::GPSSample::timestamp_ms, "");
-
-  auto pyClassPointInTime_GPSSample =
-      nb::class_<pacer::PointInTime<GPSSample>>(m, "PointInTime_GPSSample", "")
-          .def(
-              "__init__",
-              [](pacer::PointInTime<GPSSample> *self, pacer::GPSSample point,
-                 double time = double()) {
-                new (self) pacer::PointInTime<GPSSample>(); // placement new
-                auto r_ctor_ = self;
-                r_ctor_->point = point;
-                r_ctor_->time = time;
-              },
-              nb::arg("point"), nb::arg("time") = double())
-          .def_rw("point", &pacer::PointInTime<GPSSample>::point, "")
-          .def_rw("time", &pacer::PointInTime<GPSSample>::time, "");
 
   auto pyClassVec3f =
       nb::class_<pacer::Vec3f>(m, "Vec3f", "")
@@ -190,6 +174,9 @@ void py_init_module_pacer(nb::module_ &m) {
   m.def("interpolate",
         nb::overload_cast<GPSSample, GPSSample, double>(pacer::Interpolate),
         nb::arg("from_"), nb::arg("to"), nb::arg("ratio"));
+
+  m.def("split", pacer::Split, nb::arg("start_line"), nb::arg("first"),
+        nb::arg("second"));
   ////////////////////    </generated_from:geometry.hpp>    ////////////////////
 
   ////////////////////    <generated_from:laps.hpp>    ////////////////////
@@ -198,15 +185,14 @@ void py_init_module_pacer(nb::module_ &m) {
           .def(
               "__init__",
               [](pacer::Lap *self,
-                 std::vector<PointInTime<GPSSample>> points =
-                     std::vector<PointInTime<GPSSample>>(),
+                 std::vector<GPSSample> points = std::vector<GPSSample>(),
                  std::vector<double> cum_distances = std::vector<double>()) {
                 new (self) pacer::Lap(); // placement new
                 auto r_ctor_ = self;
                 r_ctor_->points = points;
                 r_ctor_->cum_distances = cum_distances;
               },
-              nb::arg("points") = std::vector<PointInTime<GPSSample>>(),
+              nb::arg("points") = std::vector<GPSSample>(),
               nb::arg("cum_distances") = std::vector<double>())
           .def_rw("points", &pacer::Lap::points, "")
           .def_rw("cum_distances", &pacer::Lap::cum_distances, "")
@@ -271,7 +257,7 @@ void py_init_module_pacer(nb::module_ &m) {
                nb::arg("sector"))
           .def("sector_entry_speed", &pacer::Laps::SectorEntrySpeed,
                nb::arg("sector"))
-          .def("add_point", &pacer::Laps::AddPoint, nb::arg("s"), nb::arg("t"))
+          .def("add_point", &pacer::Laps::AddPoint, nb::arg("s"))
           .def("point_count", &pacer::Laps::PointCount)
           .def("get_point", &pacer::Laps::GetPoint, nb::arg("row"))
           .def("clear_points", &pacer::Laps::ClearPoints);

@@ -46,6 +46,9 @@ pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to,
       .altitude = from.altitude * (1 - ratio) + to.altitude * ratio,
       .full_speed = from.full_speed * (1 - ratio) + to.full_speed * ratio,
       .ground_speed = from.ground_speed * (1 - ratio) + to.ground_speed * ratio,
+      .timestamp_ms = from.timestamp_ms +
+                      static_cast<int64_t>(std::llround(
+                          (to.timestamp_ms - from.timestamp_ms) * ratio)),
   };
 }
 

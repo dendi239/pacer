@@ -13,6 +13,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+enable_testing()
+
 find_package(Python 3.11
     REQUIRED COMPONENTS Interpreter Development.Module
     OPTIONAL_COMPONENTS Development.SABIModule)
@@ -30,6 +32,6 @@ if(NOT SKBUILD)
     add_subdirectory(examples)
     add_subdirectory(tests)
 endif()
-if (SKBUILD)
+if(SKBUILD)
     add_subdirectory(bindings)
 endif()

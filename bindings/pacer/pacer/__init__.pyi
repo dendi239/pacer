@@ -7,34 +7,21 @@ from typing import overload, Callable, Tuple, List, Any
 class GPSSample:
     lat: float
     lon: float
-    altitude: float
-    full_speed: float
-    ground_speed: float
-    timestamp_ms: int
+    altitude: float = 0
+    full_speed: float = 0
+    ground_speed: float = 0
+    timestamp_ms: int = 0
     def __init__(
         self,
         lat: float = float(),
         lon: float = float(),
-        altitude: float = float(),
-        full_speed: float = float(),
-        ground_speed: float = float(),
-        timestamp_ms: int = int(),
+        altitude: float = 0,
+        full_speed: float = 0,
+        ground_speed: float = 0,
+        timestamp_ms: int = 0,
     ) -> None:
         """Auto-generated default constructor with named params"""
         pass
-
-#  ------------------------------------------------------------------------
-#      <template specializations for class PointInTime>
-class PointInTime_GPSSample:  # Python specialization for PointInTime<GPSSample>
-    point: GPSSample
-    time: float
-
-    def __init__(self, point: GPSSample = GPSSample(), time: float = float()) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-#      </template specializations for class PointInTime>
-#  ------------------------------------------------------------------------
 
 class Vec3f:
     x: float = 0
@@ -180,12 +167,17 @@ def interpolate(from_: GPSSample, to: GPSSample, ratio: float) -> GPSSample:
 #                                static_cast<const Concrete &>(to) * ratio);
 # }
 
+def split(
+    start_line: Segment, first: GPSSample, second: GPSSample
+) -> Optional[GPSSample]:
+    pass
+
 ####################    </generated_from:geometry.hpp>    ####################
 
 ####################    <generated_from:laps.hpp>    ####################
 
 class Lap:
-    points: List[PointInTime[GPSSample]]
+    points: List[GPSSample]
 
     cum_distances: List[float]
 
@@ -200,7 +192,7 @@ class Lap:
 
     def __init__(
         self,
-        points: List[PointInTime[GPSSample]] = List[PointInTime < GPSSample] > (),
+        points: List[GPSSample] = List[GPSSample](),
         cum_distances: List[float] = List[float](),
     ) -> None:
         """Auto-generated default constructor with named params"""
@@ -229,7 +221,6 @@ class Laps:
         """
         pass
     # ---------------------------- PRESENTATION -------------------------------//
-
     def set_coordinate_system(self, coordinate_system: CoordinateSystem) -> None:
         pass
 
@@ -257,7 +248,7 @@ class Laps:
     def start_timestamp(self, lap: int) -> float:
         pass
 
-    def at(self, lap: int, row: int) -> PointInTime_GPSSample:
+    def at(self, lap: int, row: int) -> GPSSample:
         pass
 
     def speed(self, lap: int, row: int) -> float:
@@ -272,7 +263,6 @@ class Laps:
     def get_lap(self, lap: int) -> Lap:
         pass
     # ------------------------------- SECTORS ---------------------------------//
-
     def sector_count(self) -> int:
         pass
 
@@ -291,14 +281,13 @@ class Laps:
     def sector_entry_speed(self, sector: int) -> float:
         pass
     # ------------------------------ RAW POINTS -------------------------------//
-
-    def add_point(self, s: GPSSample, t: float) -> None:
+    def add_point(self, s: GPSSample) -> None:
         pass
 
     def point_count(self) -> int:
         pass
 
-    def get_point(self, row: int) -> PointInTime_GPSSample:
+    def get_point(self, row: int) -> GPSSample:
         pass
 
     def clear_points(self) -> None:

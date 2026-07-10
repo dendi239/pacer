@@ -240,7 +240,7 @@ extern "C" void app_main(void) {
       }
     }
 
-    timing.OnSample(sample, pvt.iTOW / 1e3);
+    timing.OnSample(sample);
 
     // 25 Hz in, ~8 Hz to the screen: plenty for eyes, cheap for LVGL.
     if (++samples_since_ui >= 3) {

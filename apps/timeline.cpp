@@ -37,7 +37,9 @@ static bool LoadLapsFromFiles(pacer::Laps *plaps,
   plaps->ClearPoints();
   std::vector<std::string> errors;
   bool loaded_any = false;
-  double time_offset = 0.0;
+  // Clock for files that predate timestamped samples: synthesized from the
+  // MP4 chunk spans and chained across files so they stay ordered.
+  double fallback_offset_s = 0.0;
 
   for (const auto &filename : filenames) {
     if (filename.empty())
@@ -52,46 +54,28 @@ static bool LoadLapsFromFiles(pacer::Laps *plaps,
     if (HasExtension(filename, ".dat")) {
       pacer::ReadDatFile(
           filename.c_str(),
-          [&](pacer::GPSSample sample, double time) {
-            plaps->AddPoint(sample, time + time_offset);
-          },
+          [&](pacer::GPSSample sample, double) { plaps->AddPoint(sample); },
           pacer::DatVersion::WITH_TIMESTAMP);
       loaded_any = true;
     } else {
       pacer::GPMFSource source(filename.c_str());
       source.Seek(0);
-      int64_t file_start_timestamp_ms = 0;
-      bool have_file_timestamp = false;
-      double file_time_offset = 0.0;
-      double last_timeline_time = time_offset;
+      double file_duration_s = 0.0;
       while (!source.IsEnd()) {
         auto [start, end] = source.CurrentTimeSpan();
         source.RawGPSSource::Samples(
             [&](pacer::GPSSample sample, size_t current, size_t total) {
-              double timeline_time;
-              if (sample.timestamp_ms != 0) {
-                if (!have_file_timestamp) {
-                  file_start_timestamp_ms = sample.timestamp_ms;
-                  have_file_timestamp = true;
-                }
-                timeline_time =
-                    time_offset + static_cast<double>(sample.timestamp_ms -
-                                                      file_start_timestamp_ms) /
-                                      1000.0;
-              } else {
-                timeline_time = time_offset + file_time_offset + start +
-                                (end - start) * current / total;
+              if (sample.timestamp_ms == 0) {
+                double t = fallback_offset_s + start +
+                           (total ? (end - start) * current / total : 0.0);
+                sample.timestamp_ms = static_cast<int64_t>(t * 1000);
               }
-              plaps->AddPoint(sample, timeline_time);
-              last_timeline_time = std::max(last_timeline_time, timeline_time);
+              plaps->AddPoint(sample);
             });
-        if (!have_file_timestamp) {
-          file_time_offset += (end - start);
-        }
+        file_duration_s = std::max(file_duration_s, end);
         source.Next();
       }
-      time_offset =
-          std::max(last_timeline_time, time_offset + file_time_offset);
+      fallback_offset_s += file_duration_s;
       loaded_any = true;
     }
   }
@@ -170,8 +154,9 @@ int main(int, char **) {
 
   float duration = 0;
   if (laps.PointCount() > 0) {
-    duration =
-        laps.GetPoint(laps.PointCount() - 1).time - laps.GetPoint(0).time;
+    duration = (laps.GetPoint(laps.PointCount() - 1).timestamp_ms -
+                laps.GetPoint(0).timestamp_ms) /
+               1000.0f;
   }
   float current = 0;
 
@@ -229,8 +214,9 @@ int main(int, char **) {
           laps_display.laps = &laps;
           laps_display.selected_lap = laps.LapsCount() > 0 ? 0 : -1;
           if (laps.PointCount() > 0) {
-            duration = laps.GetPoint(laps.PointCount() - 1).time -
-                       laps.GetPoint(0).time;
+            duration = (laps.GetPoint(laps.PointCount() - 1).timestamp_ms -
+                        laps.GetPoint(0).timestamp_ms) /
+                       1000.0f;
           } else {
             duration = 0;
           }
@@ -270,8 +256,7 @@ int main(int, char **) {
         laps.ClearPoints();
         for (size_t i = static_cast<size_t>(start_p);
              i < static_cast<size_t>(end_p); ++i) {
-          auto [gps, time] = full_laps.GetPoint(i);
-          laps.AddPoint(gps, time);
+          laps.AddPoint(full_laps.GetPoint(i));
         }
       }
     }
@@ -287,7 +272,7 @@ int main(int, char **) {
     std::vector<GPSSample> gps;
     gps.reserve(laps.PointCount());
     for (size_t i = 0; i < laps.PointCount(); ++i) {
-      gps.push_back(laps.GetPoint(i).point);
+      gps.push_back(laps.GetPoint(i));
     }
     if (ImGui::Begin("Map")) {
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {

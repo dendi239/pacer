@@ -106,7 +106,7 @@ plot_data:
       "trace",
       [](int index, void *data) {
         auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-        return ld.ToImPlotPoint(ld.laps->GetPoint(index).point);
+        return ld.ToImPlotPoint(ld.laps->GetPoint(index));
       },
       reinterpret_cast<void *>(this), (int)laps->PointCount());
 
@@ -125,7 +125,6 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
         "speed trace",
         [](int index, void *data) {
           auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-          auto [gps, time] = ld.laps->At(ld.selected_lap, index);
 
           return ImPlotPoint{
               (double)index, // ld.laps->Distance(ld.selected_lap, index),
@@ -136,7 +135,6 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
         "speed trace",
         [](int index, void *data) {
           auto &ld = *reinterpret_cast<LapsDisplay *>(data);
-          auto [gps, time] = ld.laps->At(ld.selected_lap, index);
 
           return ImPlotPoint{
               (double)index, // ld.laps->Distance(ld.selected_lap, index),
@@ -296,10 +294,9 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
             [](int index, void *data) -> ImPlotPoint {
               auto &[lap, lap_id] =
                   *reinterpret_cast<std::pair<pacer::Lap, int> *>(data);
-              auto [gps, time] = lap.points[index];
 
               return ImPlotPoint{lap.cum_distances[index],
-                                 lap.points[index].point.full_speed * 3.6};
+                                 lap.points[index].full_speed * 3.6};
             },
             (void *)&data, (int)lap.Count());
       }
@@ -326,9 +323,12 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
               std::format("lap {}", lap_id).c_str(),
               [](int index, void *data) -> ImPlotPoint {
                 auto [lap, best_lap] = *(std::tuple<Lap &, Lap &> *)data;
-                auto lap_time = lap.points[index].time - lap.points[0].time;
-                auto best_time =
-                    best_lap.points[index].time - best_lap.points[0].time;
+                auto lap_time = (lap.points[index].timestamp_ms -
+                                 lap.points[0].timestamp_ms) /
+                                1000.0;
+                auto best_time = (best_lap.points[index].timestamp_ms -
+                                  best_lap.points[0].timestamp_ms) /
+                                 1000.0;
                 assert(best_time < 1000 && best_time >= 0);
                 assert(lap_time < 1000 && lap_time >= 0);
 

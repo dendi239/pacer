@@ -10,7 +10,7 @@ if(NOT SKBUILD)
     )
 
     hello_imgui_add_app(track_annotator track_annotator.cpp)
-    target_link_libraries(track_annotator PRIVATE CURL::libcurl)
+    target_link_libraries(track_annotator PRIVATE CURL::libcurl pacer::reference-track)
 
     if(EMSCRIPTEN)
         set_target_properties(timeline PROPERTIES SUFFIX ".js")

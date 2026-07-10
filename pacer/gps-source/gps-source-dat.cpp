@@ -24,6 +24,7 @@ void pacer::ReadDatFile(const char *filename, void *data,
         .altitude = gps.height / 1000.0,     // mm to m
         .full_speed = gps.gSpeed / 1000.0,   // mm/s to m/s
         .ground_speed = gps.gSpeed / 1000.0, // mm/s to m/s
+        .timestamp_ms = gps.iTOW,
     };
 
     if (on_sample) {

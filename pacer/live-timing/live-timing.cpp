@@ -98,7 +98,8 @@ void pacer::LiveTiming::RecordGate(size_t gate, double crossing_time) {
   }
 }
 
-void pacer::LiveTiming::OnSample(GPSSample s, double t) {
+void pacer::LiveTiming::OnSample(GPSSample s) {
+  double t = s.timestamp_ms / 1000.0;
   snapshot_.speed_mps = s.full_speed;
 
   if (!snapshot_.session_started && s.full_speed > cfg_.start_speed_mps) {
@@ -110,7 +111,7 @@ void pacer::LiveTiming::OnSample(GPSSample s, double t) {
         cfg_.session_length_s - (t - session_start_time_);
   }
 
-  PointInTime<GPSSample> cur{.point = s, .time = t};
+  GPSSample cur = s;
   if (!has_prev_ || gates_.empty()) {
     has_prev_ = !gates_.empty();
     prev_ = cur;
@@ -128,7 +129,7 @@ void pacer::LiveTiming::OnSample(GPSSample s, double t) {
   if (!on_lap_) {
     // Out lap: nothing to time until the start line is crossed.
     if (auto split = Split(gates_[0], prev_, cur)) {
-      StartLap(split->time);
+      StartLap(split->timestamp_ms / 1000.0);
     }
   } else {
     // At 25 Hz a kart covers a couple of meters per sample, so one interval
@@ -145,11 +146,12 @@ void pacer::LiveTiming::OnSample(GPSSample s, double t) {
         if (!split) {
           continue;
         }
+        double crossing_time = split->timestamp_ms / 1000.0;
         if (idx == 0) {
-          FinishLap(split->time);
-          StartLap(split->time);
+          FinishLap(crossing_time);
+          StartLap(crossing_time);
         } else {
-          RecordGate(idx, split->time);
+          RecordGate(idx, crossing_time);
           next_gate_ = (idx + 1) % gates_.size();
         }
         found = true;
@@ -159,14 +161,15 @@ void pacer::LiveTiming::OnSample(GPSSample s, double t) {
 
     // Resync guard: whatever the gate tracker thinks, a start-line crossing
     // after a plausible lap time always closes the lap.
-    if (t - lap_start_time_ > cfg_.min_lap_s && next_gate_ != 1 % gates_.size()) {
+    if (t - lap_start_time_ > cfg_.min_lap_s &&
+        next_gate_ != 1 % gates_.size()) {
       size_t window = std::min(cfg_.gate_lookahead, gates_.size());
       bool zero_in_window =
           next_gate_ + window > gates_.size(); // window wraps past gate 0
       if (!zero_in_window) {
         if (auto split = Split(gates_[0], prev_, cur)) {
-          FinishLap(split->time);
-          StartLap(split->time);
+          FinishLap(split->timestamp_ms / 1000.0);
+          StartLap(split->timestamp_ms / 1000.0);
         }
       }
     }

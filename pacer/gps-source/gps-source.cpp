@@ -267,7 +267,7 @@ uint32_t GPMFSource::Samples(void *data,
             union {
               GPSSample gps;
               double values[5];
-            } r;
+            } r = {};
 
             for (i = 0; i < samples; i++) {
               r.gps.timestamp_ms = timestamp;

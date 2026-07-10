@@ -142,9 +142,9 @@ pacer::ReferenceTrack::FromLap(const Lap &lap, float width,
   track.segments.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     size_t idx = i + 1;
-    Vec3f prev = cs.Local(lap.points[idx - 1].point);
-    Vec3f curr = cs.Local(lap.points[idx].point);
-    Vec3f next = cs.Local(lap.points[idx + 1].point);
+    Vec3f prev = cs.Local(lap.points[idx - 1]);
+    Vec3f curr = cs.Local(lap.points[idx]);
+    Vec3f next = cs.Local(lap.points[idx + 1]);
 
     Vec3f dir = (next - prev);
     dir /= std::sqrt(dir.Norm());

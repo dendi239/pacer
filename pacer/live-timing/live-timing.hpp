@@ -96,9 +96,9 @@ public:
   /// and finishes laps.
   void SetReferenceTrack(const ReferenceTrack &rt, SessionConfig cfg = {});
 
-  /// Feed one GPS fix; `t` is seconds on any monotonic clock consistent
-  /// across the session (e.g. UBX iTOW / 1e3).
-  void OnSample(GPSSample s, double t);
+  /// Feed one GPS fix; `s.timestamp_ms` must be milliseconds on a monotonic
+  /// clock consistent across the session (e.g. UBX iTOW).
+  void OnSample(GPSSample s);
 
   LiveSnapshot Snapshot() const { return snapshot_; }
 
@@ -124,10 +124,10 @@ private:
   std::vector<Segment> gates_;
 
   bool has_prev_ = false;
-  PointInTime<GPSSample> prev_;
+  GPSSample prev_;
 
   bool on_lap_ = false;
-  size_t next_gate_ = 0;    ///< next expected gate index while on a lap
+  size_t next_gate_ = 0; ///< next expected gate index while on a lap
   double lap_start_time_ = 0;
   size_t last_recorded_gate_ = 0;
 

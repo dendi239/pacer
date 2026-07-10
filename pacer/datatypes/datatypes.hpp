@@ -12,15 +12,6 @@ struct GPSSample {
   int64_t timestamp_ms = 0;
 };
 
-template <class P> struct PointInTime {
-  P point;
-  double time;
-
-  template <class F, class U> PointInTime<U> Map(F f) const {
-    return PointInTime<U>{.point = f(point), .time = time};
-  }
-};
-
 inline std::ostream &operator<<(std::ostream &os, const GPSSample &s) {
   return os << "GPS(t: " << s.timestamp_ms << ", lat: " << std::setprecision(4)
             << std::fixed << s.lat << ", lon: " << s.lon
