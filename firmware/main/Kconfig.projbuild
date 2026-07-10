@@ -1,0 +1,117 @@
+menu "Pacer Dashboard"
+
+    menu "GPS (u-blox, UART)"
+        config PACER_GPS_UART_NUM
+            int "UART port number"
+            default 1
+        config PACER_GPS_RX_GPIO
+            int "RX GPIO (to GPS TX)"
+            default 18
+        config PACER_GPS_TX_GPIO
+            int "TX GPIO (to GPS RX)"
+            default 17
+        config PACER_GPS_BAUD
+            int "Baud rate"
+            default 115200
+            help
+                The receiver is switched to this baud at boot (from its
+                9600 default if needed). 25 Hz NAV-PVT needs ~25 kbit/s,
+                so keep this at 115200 or above.
+    endmenu
+
+    menu "Display (NV3041A, QSPI)"
+        config PACER_LCD_SPI_HOST
+            int "SPI host (1 = SPI2_HOST, 2 = SPI3_HOST)"
+            default 1
+        config PACER_LCD_PCLK_GPIO
+            int "PCLK (SCLK) GPIO"
+            default 47
+        config PACER_LCD_DATA0_GPIO
+            int "QSPI DATA0 GPIO"
+            default 21
+        config PACER_LCD_DATA1_GPIO
+            int "QSPI DATA1 GPIO"
+            default 48
+        config PACER_LCD_DATA2_GPIO
+            int "QSPI DATA2 GPIO"
+            default 40
+        config PACER_LCD_DATA3_GPIO
+            int "QSPI DATA3 GPIO"
+            default 39
+        config PACER_LCD_CS_GPIO
+            int "CS GPIO"
+            default 45
+        config PACER_LCD_RST_GPIO
+            int "RST GPIO (-1 if tied to EN)"
+            default -1
+        config PACER_LCD_BL_GPIO
+            int "Backlight GPIO (-1 if always on)"
+            default 1
+        config PACER_LCD_H_RES
+            int "Horizontal resolution (as mounted)"
+            default 480
+        config PACER_LCD_V_RES
+            int "Vertical resolution (as mounted)"
+            default 272
+        config PACER_LCD_SWAP_XY
+            bool "Swap X/Y (landscape on a portrait panel)"
+            default n
+        config PACER_LCD_MIRROR_X
+            bool "Mirror X"
+            default y
+        config PACER_LCD_MIRROR_Y
+            bool "Mirror Y"
+            default y
+        config PACER_LCD_INVERT_COLORS
+            bool "Invert colors"
+            default n
+    endmenu
+
+    menu "Touch (GT911, I2C)"
+        config PACER_TOUCH_ENABLED
+            bool "GT911 touch controller present"
+            default y
+        config PACER_TOUCH_SDA_GPIO
+            int "SDA GPIO"
+            depends on PACER_TOUCH_ENABLED
+            default 8
+        config PACER_TOUCH_SCL_GPIO
+            int "SCL GPIO"
+            depends on PACER_TOUCH_ENABLED
+            default 4
+        config PACER_TOUCH_RST_GPIO
+            int "RST GPIO (-1 if unconnected)"
+            depends on PACER_TOUCH_ENABLED
+            default 38
+        config PACER_TOUCH_INT_GPIO
+            int "INT GPIO (-1 if unconnected)"
+            depends on PACER_TOUCH_ENABLED
+            default 3
+    endmenu
+
+    menu "SD card (SPI)"
+        config PACER_SD_SPI_HOST
+            int "SPI host (must differ from the LCD host)"
+            default 2
+        config PACER_SD_SCLK_GPIO
+            int "SCLK GPIO"
+            default 12
+        config PACER_SD_MOSI_GPIO
+            int "MOSI GPIO"
+            default 11
+        config PACER_SD_MISO_GPIO
+            int "MISO GPIO"
+            default 13
+        config PACER_SD_CS_GPIO
+            int "CS GPIO"
+            default 10
+    endmenu
+
+    config PACER_SESSION_MINUTES
+        int "Default session length (minutes)"
+        default 15
+        help
+            Used when the SD card has no /sdcard/pacer/config.json with a
+            "session_minutes" entry.
+
+endmenu
