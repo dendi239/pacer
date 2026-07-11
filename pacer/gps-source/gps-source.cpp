@@ -1,10 +1,9 @@
 #include "gps-source.hpp"
 
-#include <chrono>
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
-#include <format>
-#include <iostream>
-#include <numeric>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
@@ -367,4 +366,69 @@ uint32_t RawGPSSource::ReadSamples(
     f(sample, current_index, total_records);
   });
 }
+
+static bool HasExtension(const std::string &filename, const std::string &ext) {
+  if (filename.size() < ext.size())
+    return false;
+  std::string lower_ext = filename.substr(filename.size() - ext.size());
+  std::transform(lower_ext.begin(), lower_ext.end(), lower_ext.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return lower_ext == ext;
+}
+
+size_t LoadGPSFiles(const std::vector<std::string> &filenames,
+                    const std::function<void(GPSSample)> &on_sample,
+                    std::vector<std::string> *errors) {
+  size_t loaded_files = 0;
+  // Clock for files that predate timestamped samples: synthesized from the
+  // MP4 chunk spans and chained across files so they stay ordered.
+  double fallback_offset_s = 0.0;
+
+  for (const auto &filename : filenames) {
+    if (filename.empty())
+      continue;
+    if (!std::ifstream(filename).is_open()) {
+      if (errors)
+        errors->push_back(filename + ": not found");
+      continue;
+    }
+
+    if (HasExtension(filename, ".dat")) {
+      ReadDatFile(
+          filename.c_str(),
+          [&](GPSSample sample, double) { on_sample(sample); },
+          DatVersion::WITH_TIMESTAMP);
+      ++loaded_files;
+      continue;
+    }
+
+    try {
+      GPMFSource source(filename.c_str());
+      source.Seek(0);
+      double file_duration_s = 0.0;
+      while (!source.IsEnd()) {
+        auto [start, end] = source.CurrentTimeSpan();
+        source.RawGPSSource::Samples(
+            [&](GPSSample sample, size_t current, size_t total) {
+              if (sample.timestamp_ms == 0) {
+                double t = fallback_offset_s + start +
+                           (total ? (end - start) * current / total : 0.0);
+                sample.timestamp_ms = static_cast<int64_t>(t * 1000);
+              }
+              on_sample(sample);
+            });
+        file_duration_s = std::max(file_duration_s, end);
+        source.Next();
+      }
+      fallback_offset_s += file_duration_s;
+      ++loaded_files;
+    } catch (const std::exception &e) {
+      if (errors)
+        errors->push_back(filename + ": " + e.what());
+    }
+  }
+
+  return loaded_files;
+}
+
 } // namespace pacer

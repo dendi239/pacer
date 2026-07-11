@@ -6,7 +6,6 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "imgui_stdlib.h"
 #include "implot.h"
 #include "implot_internal.h"
 
@@ -22,27 +21,23 @@ ImPlotPoint pacer::LapsDisplay::ToImPlotPoint(GPSSample s) const {
   return {p[0], p[1]};
 }
 
-void pacer::LapsDisplay::DragTimingLine(Segment *s, const char *name,
-                                        int drag_id) {
-  auto get_point = [](int index, void *data) -> ImPlotPoint {
-    auto &s = *reinterpret_cast<Segment *>(data);
-    const Point &p = index ? s.second : s.first;
-    return {p.x, p.y};
-  };
-
-  ImPlot::PlotLineG(name, get_point, s, 2, 0);
-  ImPlot::PlotScatterG(name, get_point, s, 2, 0);
-
-  ImPlot::DragPoint(2 * drag_id + 1, &s->first.x, &s->first.y,
-                    ImPlot::GetLastItemColor());
-  ImPlot::DragPoint(2 * drag_id + 2, &s->second.x, &s->second.y,
-                    ImPlot::GetLastItemColor());
+// Plots a timing line as a plain (non-draggable) segment; the geometry is
+// owned by the reference track, so it's edited in track_annotator, not here.
+static void PlotTimingLine(const char *name, const pacer::Segment &s) {
+  double xs[2] = {s.first.x, s.second.x};
+  double ys[2] = {s.first.y, s.second.y};
+  ImPlot::PlotLine(name, xs, ys, 2);
+  ImPlot::PlotScatter(name, xs, ys, 2);
 }
 
-void pacer::LapsDisplay::DisplayMap() {
+bool pacer::LapsDisplay::HasMapFrame() const {
+  return laps && laps->PointCount() > 0 && bounds.first.x < bounds.second.x;
+}
+
+void pacer::LapsDisplay::SetupMap() {
   if (bounds.first.x >= bounds.second.x) {
     if (laps->PointCount() == 0)
-      goto plot_data;
+      return;
 
     bounds = laps->MinMax();
     cs = CoordinateSystem(GPSSample{
@@ -51,7 +46,6 @@ void pacer::LapsDisplay::DisplayMap() {
         .altitude = 0,
     });
     laps->SetCoordinateSystem(cs);
-    laps->sectors.start_line = laps->PickRandomStart();
     auto min_ = cs.Local(GPSSample{
         .lat = bounds.first.y,
         .lon = bounds.first.x,
@@ -99,9 +93,9 @@ void pacer::LapsDisplay::DisplayMap() {
         (bounds.first.y + bounds.second.y) / 2 + y_width / 2,
         ImPlotCond_Always);
   }
+}
 
-plot_data:
-
+void pacer::LapsDisplay::PlotMapItems() {
   ImPlot::PlotLineG(
       "trace",
       [](int index, void *data) {
@@ -110,12 +104,16 @@ plot_data:
       },
       reinterpret_cast<void *>(this), (int)laps->PointCount());
 
-  DragTimingLine(&laps->sectors.start_line, "Start", 0);
+  const Segment &start = laps->sectors.start_line;
+  bool has_start = start.first.x != start.second.x ||
+                   start.first.y != start.second.y;
+  if (has_start) {
+    PlotTimingLine("Start", start);
+  }
   for (int i = 0; i < laps->SectorCount(); ++i) {
-    auto &s = laps->sectors.sector_lines[i];
     std::stringstream ss;
     ss << "Sector " << i + 1;
-    DragTimingLine(&s, ss.str().c_str(), i + 1);
+    PlotTimingLine(ss.str().c_str(), laps->sectors.sector_lines[i]);
   }
 }
 
@@ -146,14 +144,6 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
   }
 }
 bool pacer::LapsDisplay::DisplayTable() {
-  if (ImGui::Button("Add sector")) {
-    laps->sectors.sector_lines.push_back(laps->PickRandomStart());
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Reset sectors")) {
-    laps->ClearSectors();
-  }
-
   size_t sector_count = 1 + laps->SectorCount();
   if (!ImGui::BeginTable("Laps", 4 + 2 * (int)sector_count,
                          ImGuiTableFlags_RowBg |
@@ -219,12 +209,14 @@ ImPlotPoint Vec3fToPoint(int index, void *data) {
 }
 
 void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(Laps &laps) {
-  ImGui::SetNextItemWidth(200.0f);
-  ImGui::InputText("Reference track file", &reference_track_filename);
-  ImGui::SameLine();
-  if (ImGui::Button("Load reference track")) {
+  bool load = reference_track_picker.Draw("reference_track");
+  if (ImGui::Button("Load reference track") &&
+      !reference_track_picker.path.empty()) {
+    load = true;
+  }
+  if (load) {
     try {
-      reference_track = ReferenceTrack::FromFile(reference_track_filename);
+      reference_track = ReferenceTrack::FromFile(reference_track_picker.path);
       reference_track_status = "Loaded " +
                                std::to_string(reference_track.segments.size()) +
                                " segments";

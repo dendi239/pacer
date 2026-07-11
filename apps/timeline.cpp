@@ -1,6 +1,3 @@
-#include <algorithm>
-#include <cctype>
-#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -12,75 +9,26 @@
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <implot.h>
-#include <implot_internal.h>
 
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
 #include <pacer/gps-source/gps-source.hpp>
 #include <pacer/laps-display/laps-display.hpp>
 #include <pacer/laps/laps.hpp>
+#include <pacer/map-tiles/implot-tiles.hpp>
+#include <pacer/map-tiles/tile-store.hpp>
 
 using pacer::GPSSample;
-
-static bool HasExtension(const std::string &filename, const std::string &ext) {
-  if (filename.size() < ext.size())
-    return false;
-  std::string lower_ext = filename.substr(filename.size() - ext.size());
-  std::transform(lower_ext.begin(), lower_ext.end(), lower_ext.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return lower_ext == ext;
-}
 
 static bool LoadLapsFromFiles(pacer::Laps *plaps,
                               const std::vector<std::string> &filenames,
                               std::string &message) {
   plaps->ClearPoints();
   std::vector<std::string> errors;
-  bool loaded_any = false;
-  // Clock for files that predate timestamped samples: synthesized from the
-  // MP4 chunk spans and chained across files so they stay ordered.
-  double fallback_offset_s = 0.0;
+  size_t loaded_files = pacer::LoadGPSFiles(
+      filenames, [&](GPSSample sample) { plaps->AddPoint(sample); }, &errors);
 
-  for (const auto &filename : filenames) {
-    if (filename.empty())
-      continue;
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-      errors.push_back(filename + ": not found");
-      continue;
-    }
-    file.close();
-
-    if (HasExtension(filename, ".dat")) {
-      pacer::ReadDatFile(
-          filename.c_str(),
-          [&](pacer::GPSSample sample, double) { plaps->AddPoint(sample); },
-          pacer::DatVersion::WITH_TIMESTAMP);
-      loaded_any = true;
-    } else {
-      pacer::GPMFSource source(filename.c_str());
-      source.Seek(0);
-      double file_duration_s = 0.0;
-      while (!source.IsEnd()) {
-        auto [start, end] = source.CurrentTimeSpan();
-        source.RawGPSSource::Samples(
-            [&](pacer::GPSSample sample, size_t current, size_t total) {
-              if (sample.timestamp_ms == 0) {
-                double t = fallback_offset_s + start +
-                           (total ? (end - start) * current / total : 0.0);
-                sample.timestamp_ms = static_cast<int64_t>(t * 1000);
-              }
-              plaps->AddPoint(sample);
-            });
-        file_duration_s = std::max(file_duration_s, end);
-        source.Next();
-      }
-      fallback_offset_s += file_duration_s;
-      loaded_any = true;
-    }
-  }
-
-  if (!loaded_any) {
+  if (loaded_files == 0) {
     message = "No files loaded.";
     if (!errors.empty())
       message += " " + errors.front();
@@ -98,19 +46,8 @@ static bool LoadLapsFromFiles(pacer::Laps *plaps,
   }
 
   message = "Loaded " + std::to_string(plaps->PointCount()) + " points from " +
-            std::to_string(filenames.size()) + " files.";
+            std::to_string(loaded_files) + " files.";
   return true;
-}
-
-void ShowMenu(HelloImGui::RunnerParams &runnerParams) {
-  if (ImGui::BeginMenu("My Menu")) {
-    bool clicked = ImGui::MenuItem("Test me", "F", false);
-    if (clicked) {
-      HelloImGui::Log(HelloImGui::LogLevel::Warning, "It works");
-    }
-    ImGui::EndMenu();
-  }
-  HelloImGui::ShowViewMenu(runnerParams);
 }
 
 // Sensible default docking layout setup
@@ -140,25 +77,14 @@ HelloImGui::DockingParams CreateDefaultLayout() {
 
 // Main code
 int main(int, char **) {
-  pacer::Laps full_laps;
+  pacer::Laps laps;
 
   std::vector<std::string> load_filenames = {""};
   std::string load_message = "Enter file paths and click Load files.";
 
-  if (full_laps.PointCount() > 0)
-    full_laps.sectors.start_line = full_laps.PickRandomStart();
-  auto laps = full_laps;
-
   auto laps_display = pacer::LapsDisplay{&laps};
   pacer::DeltaLapsComparision delta;
-
-  float duration = 0;
-  if (laps.PointCount() > 0) {
-    duration = (laps.GetPoint(laps.PointCount() - 1).timestamp_ms -
-                laps.GetPoint(0).timestamp_ms) /
-               1000.0f;
-  }
-  float current = 0;
+  pacer::TileStore tile_store;
 
   auto implotContext = ImPlot::CreateContext();
 
@@ -178,7 +104,9 @@ int main(int, char **) {
   runnerParams.imGuiWindowParams.showMenu_App = false;
   runnerParams.imGuiWindowParams.showMenu_View = false;
 
-  runnerParams.callbacks.ShowMenus = [&]() { ShowMenu(runnerParams); };
+  runnerParams.callbacks.ShowMenus = [&]() {
+    HelloImGui::ShowViewMenu(runnerParams);
+  };
 
   // Define GUI Dockable Windows
   HelloImGui::DockableWindow loadFilesWindow;
@@ -206,58 +134,18 @@ int main(int, char **) {
         ImGui::PopID();
       }
       if (ImGui::Button("Load files")) {
-        if (LoadLapsFromFiles(&full_laps, load_filenames, load_message)) {
+        if (LoadLapsFromFiles(&laps, load_filenames, load_message)) {
           laps_display.bounds = {{1.0, 1.0}, {0.0, 0.0}};
+          laps_display.selected_lap = -1;
           delta.selected_laps.clear();
-          full_laps.sectors.start_line = full_laps.PickRandomStart();
-          laps = full_laps;
-          laps_display.laps = &laps;
-          laps_display.selected_lap = laps.LapsCount() > 0 ? 0 : -1;
-          if (laps.PointCount() > 0) {
-            duration = (laps.GetPoint(laps.PointCount() - 1).timestamp_ms -
-                        laps.GetPoint(0).timestamp_ms) /
-                       1000.0f;
-          } else {
-            duration = 0;
-          }
-          current = 0;
+          // Sectors live in the reference track's coordinate frame; the
+          // map frame is rebuilt for the new data, so they must be
+          // re-applied by loading the reference track again.
+          laps.sectors = pacer::Sectors{};
         }
       }
       if (!load_message.empty()) {
         ImGui::TextWrapped("%s", load_message.c_str());
-      }
-    }
-    ImGui::End();
-  };
-
-  HelloImGui::DockableWindow dataSubsetWindow;
-  dataSubsetWindow.label = "Data Subset";
-  dataSubsetWindow.dockSpaceName = "LeftSpace";
-  dataSubsetWindow.callBeginEnd = false;
-  dataSubsetWindow.canBeClosed = false;
-  dataSubsetWindow.GuiFunction = [&]() {
-    static float start_p = 0, end_p = 0;
-    float total_points = static_cast<float>(full_laps.PointCount());
-    if (end_p != total_points) {
-      end_p = total_points;
-      start_p = 0;
-    }
-    start_p = std::clamp(start_p, 0.0f, total_points);
-    end_p = std::clamp(end_p, start_p, total_points);
-
-    if (ImGui::Begin("Data Subset")) {
-      ImGui::Text("Select data subset to display on the map");
-      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2);
-      if (ImGui::SliderFloat("Start", &start_p, 0, total_points) ||
-          (ImGui::SameLine(),
-           ImGui::SliderFloat("End", &end_p, 0, total_points))) {
-        start_p = std::clamp(start_p, 0.0f, total_points);
-        end_p = std::clamp(end_p, start_p, total_points);
-        laps.ClearPoints();
-        for (size_t i = static_cast<size_t>(start_p);
-             i < static_cast<size_t>(end_p); ++i) {
-          laps.AddPoint(full_laps.GetPoint(i));
-        }
       }
     }
     ImGui::End();
@@ -269,19 +157,19 @@ int main(int, char **) {
   mapWindow.callBeginEnd = false;
   mapWindow.canBeClosed = false;
   mapWindow.GuiFunction = [&]() {
-    std::vector<GPSSample> gps;
-    gps.reserve(laps.PointCount());
-    for (size_t i = 0; i < laps.PointCount(); ++i) {
-      gps.push_back(laps.GetPoint(i));
-    }
     if (ImGui::Begin("Map")) {
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
-        laps_display.DisplayMap();
+        laps_display.SetupMap();
+        if (laps_display.HasMapFrame()) {
+          pacer::PlotSatelliteTiles(tile_store, laps_display.cs);
+        }
+        laps_display.PlotMapItems();
 
-        if (!gps.empty()) {
+        if (laps.PointCount() > 0) {
+          auto last = laps.GetPoint(laps.PointCount() - 1);
           std::stringstream ss;
-          ss << "Speed: " << gps.back().full_speed * 3.6 << "km/h";
-          auto point = laps_display.ToImPlotPoint(gps.back());
+          ss << "Speed: " << last.full_speed * 3.6 << "km/h";
+          auto point = laps_display.ToImPlotPoint(last);
           ImPlot::PlotText(ss.str().data(), point[0], point[1]);
         }
         delta.PlotSticks();
@@ -301,7 +189,10 @@ int main(int, char **) {
 
     if (ImGui::Begin("Laps")) {
       delta.DrawReferenceTrackLoader(laps);
-      ImGui::SameLine();
+      if (laps.PointCount() > 0 && laps.LapsCount() == 0) {
+        ImGui::TextWrapped(
+            "Load a reference track to split the data into laps and sectors.");
+      }
       laps_display.DisplayTable();
     }
     ImGui::End();
@@ -377,8 +268,8 @@ int main(int, char **) {
   };
 
   runnerParams.dockingParams.dockableWindows = {
-      loadFilesWindow, dataSubsetWindow, mapWindow,         lapsWindow,
-      lapChartWindow,  deltaWindow,      lapTelemetryWindow};
+      loadFilesWindow, mapWindow,   lapsWindow,
+      lapChartWindow,  deltaWindow, lapTelemetryWindow};
 
   runnerParams.callbacks.ShowGui = [&]() { laps.Update(); };
 

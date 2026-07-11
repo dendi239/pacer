@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <pacer/datatypes/datatypes.hpp>
 
@@ -159,5 +161,14 @@ void ReadDatFile(const char *filename, F on_sample,
       },
       version);
 }
+
+/// Loads GPS samples from a mix of .dat and GPMF (.mp4 etc.) files, in the
+/// given order. Samples that predate embedded timestamps get a clock
+/// synthesized from the MP4 chunk spans, chained across files so they stay
+/// ordered. Missing/unreadable files are reported through `errors` (if
+/// non-null). Returns the number of files samples were loaded from.
+size_t LoadGPSFiles(const std::vector<std::string> &filenames,
+                    const std::function<void(GPSSample)> &on_sample,
+                    std::vector<std::string> *errors = nullptr);
 
 } // namespace pacer

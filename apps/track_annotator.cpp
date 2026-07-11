@@ -1,28 +1,18 @@
 #include <algorithm>
-#include <cmath>
-#include <condition_variable>
-#include <cstdint>
 #include <cstdio>
-#include <deque>
+#include <filesystem>
 #include <fstream>
-#include <map>
-#include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
-#include <tuple>
 #include <vector>
 
-#include <curl/curl.h>
-#include <filesystem>
-#include <glad/glad.h>
 #include <hello_imgui/hello_imgui.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
+#include <pacer/map-tiles/canvas-tiles.hpp>
+#include <pacer/map-tiles/tile-store.hpp>
 #include <pacer/reference-track/reference-track.hpp>
-
-#include "../3rdparty/hello_imgui/external/stb_hello_imgui/stb_image.h"
+#include <pacer/ui/track-picker.hpp>
 
 struct TrackPoint {
   float lat = 0.0f;
@@ -36,12 +26,9 @@ struct TrackSegment {
   bool is_sector_split = false; // marks this gate as a sector boundary
 };
 
-struct MapTileImage;
-struct TileLoader;
-
 // The undoable part of the annotation: the drawn gates and whether the
-// track loops back on itself. View/camera state, tile settings, and file
-// paths are intentionally excluded from undo/redo history.
+// track loops back on itself. View/camera state and file paths are
+// intentionally excluded from undo/redo history.
 struct TrackDocument {
   std::vector<TrackSegment> segments;
   bool track_closed = false;
@@ -56,32 +43,13 @@ struct TrackState {
   std::vector<TrackDocument> undo_stack;
   std::vector<TrackDocument> redo_stack;
   bool dragging_point = false;
-  ImVec2 view_offset = {0.0f, 0.0f};
-  float view_zoom = 1.0f;
-  std::string state_filename = "track_annotation.json";
+  bool panning_map = false;
+  bool show_infill = true;
   std::string last_message;
 
-  int map_tile_zoom = 19;
-  float map_tile_lat = 51.37600f;
-  float map_tile_lon = -0.36100f;
-  int map_tile_x = 0;
-  int map_tile_y = 0;
-  std::string map_tile_status = "Idle";
-  bool map_tile_requested = false;
-  bool auto_load_tiles = true;
-  bool show_infill = true;
-  bool panning_map = false;
-  std::map<std::tuple<int, int, int>, struct MapTileImage> tile_cache;
-  std::unique_ptr<TileLoader> tile_loader;
-};
-
-struct MapTileImage {
-  GLuint texture = 0;
-  int width = 0;
-  int height = 0;
-  bool valid = false;
-  std::string url;
-  std::string status = "Pending";
+  pacer::TileCanvasView view;
+  pacer::TileStore tiles;
+  pacer::TrackFilePicker picker;
 };
 
 // Records the current document (segments + track_closed) onto the undo
@@ -124,386 +92,17 @@ static void Redo(TrackState &state) {
   RestoreDocument(state, std::move(doc));
 }
 
-static size_t CurlWriteMemoryCallback(void *contents, size_t size, size_t nmemb,
-                                      void *userp) {
-  size_t total_size = size * nmemb;
-  auto *buffer = static_cast<std::vector<unsigned char> *>(userp);
-  auto *data = static_cast<unsigned char *>(contents);
-  buffer->insert(buffer->end(), data, data + total_size);
-  return total_size;
-}
-
-static std::pair<double, double> LatLonToTileXY(double latitude,
-                                                double longitude, int zoom) {
-  latitude = std::clamp(latitude, -85.05112878, 85.05112878);
-  double lat_rad = latitude * M_PI / 180.0;
-  double n = static_cast<double>(1 << zoom);
-  double x = (longitude + 180.0) / 360.0 * n;
-  double y =
-      (1.0 - std::log(std::tan(lat_rad) + 1.0 / std::cos(lat_rad)) / M_PI) /
-      2.0 * n;
-  return {x, y};
-}
-
-static std::string BuildSatelliteTileUrl(double latitude, double longitude,
-                                         int zoom, int &out_x, int &out_y) {
-  auto [x, y] = LatLonToTileXY(latitude, longitude, zoom);
-  out_x = static_cast<int>(std::floor(x));
-  out_y = static_cast<int>(std::floor(y));
-  int n = 1 << zoom;
-  out_x = std::clamp(out_x, 0, n - 1);
-  out_y = std::clamp(out_y, 0, n - 1);
-  char url_buffer[512];
-  std::snprintf(url_buffer, sizeof(url_buffer),
-                "https://server.arcgisonline.com/ArcGIS/rest/services/"
-                "World_Imagery/MapServer/tile/%d/%d/%d",
-                zoom, out_y, out_x);
-  return std::string(url_buffer);
-}
-
-static std::string BuildSatelliteTileUrl(int zoom, int x, int y) {
-  char url_buffer[512];
-  std::snprintf(url_buffer, sizeof(url_buffer),
-                "https://server.arcgisonline.com/ArcGIS/rest/services/"
-                "World_Imagery/MapServer/tile/%d/%d/%d",
-                zoom, y, x);
-  return std::string(url_buffer);
-}
-
-static std::pair<double, double> TileXYToLatLon(int zoom, double x, double y) {
-  double n = static_cast<double>(1 << zoom);
-  double lon = x / n * 360.0 - 180.0;
-  double lat_rad = std::atan(std::sinh(M_PI * (1.0 - 2.0 * y / n)));
-  double lat = lat_rad * 180.0 / M_PI;
-  return {lat, lon};
-}
-
-static bool DownloadImageToMemory(const std::string &url,
-                                  std::vector<unsigned char> &image_data,
-                                  std::string &error) {
-  CURL *curl = curl_easy_init();
-  if (!curl) {
-    error = "Failed to initialize curl";
-    return false;
-  }
-
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteMemoryCallback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &image_data);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                   "track_annotator/1.0 (+https://github.com/)");
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-
-  CURLcode res = curl_easy_perform(curl);
-  if (res != CURLE_OK) {
-    error = curl_easy_strerror(res);
-    curl_easy_cleanup(curl);
-    return false;
-  }
-  long response_code = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-  curl_easy_cleanup(curl);
-
-  if (response_code != 200) {
-    error = "Download failed: HTTP " + std::to_string(response_code);
-    return false;
-  }
-
-  if (image_data.empty()) {
-    error = "Downloaded image data is empty";
-    return false;
-  }
-
-  return true;
-}
-
-struct TileRequest {
-  int zoom;
-  int x;
-  int y;
-  std::string url;
-};
-
-struct TileResult {
-  int zoom;
-  int x;
-  int y;
-  std::string url;
-  bool ok = false;
-  std::vector<unsigned char> image_data;
-  std::string error;
-};
-
-// Downloads tiles on a small worker pool so satellite fetches never block the
-// render thread. Textures are still created from the results on the main
-// thread by ApplyTileResults, since the GL context lives there.
-struct TileLoader {
-  explicit TileLoader(size_t thread_count) {
-    for (size_t i = 0; i < thread_count; ++i)
-      workers.emplace_back([this] { WorkerLoop(); });
-  }
-
-  ~TileLoader() {
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      stop = true;
-    }
-    cv.notify_all();
-    for (auto &worker : workers)
-      worker.join();
-  }
-
-  void Enqueue(TileRequest request) {
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      pending.push_back(std::move(request));
-    }
-    cv.notify_one();
-  }
-
-  std::vector<TileResult> DrainResults() {
-    std::vector<TileResult> results;
-    std::lock_guard<std::mutex> lock(mutex);
-    results.swap(completed);
-    return results;
-  }
-
-  void WorkerLoop() {
-    while (true) {
-      TileRequest request;
-      {
-        std::unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [this] { return stop || !pending.empty(); });
-        if (stop && pending.empty())
-          return;
-        request = std::move(pending.front());
-        pending.pop_front();
-      }
-
-      TileResult result;
-      result.zoom = request.zoom;
-      result.x = request.x;
-      result.y = request.y;
-      result.url = request.url;
-      result.ok =
-          DownloadImageToMemory(request.url, result.image_data, result.error);
-
-      std::lock_guard<std::mutex> lock(mutex);
-      completed.push_back(std::move(result));
-    }
-  }
-
-  std::mutex mutex;
-  std::condition_variable cv;
-  std::deque<TileRequest> pending;
-  std::vector<TileResult> completed;
-  std::vector<std::thread> workers;
-  bool stop = false;
-};
-
-static bool UpdateMapTileTexture(const std::vector<unsigned char> &image_data,
-                                 const std::string &url, MapTileImage &tile,
-                                 std::string &error) {
-  int width = 0, height = 0, channels = 0;
-  unsigned char *pixels = stbi_load_from_memory(
-      image_data.data(), static_cast<int>(image_data.size()), &width, &height,
-      &channels, 4);
-  if (!pixels) {
-    error = stbi_failure_reason();
-    return false;
-  }
-
-  if (tile.texture) {
-    glDeleteTextures(1, &tile.texture);
-    tile.texture = 0;
-  }
-
-  glGenTextures(1, &tile.texture);
-  glBindTexture(GL_TEXTURE_2D, tile.texture);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, pixels);
-  glBindTexture(GL_TEXTURE_2D, 0);
-
-  stbi_image_free(pixels);
-
-  tile.width = width;
-  tile.height = height;
-  tile.valid = true;
-  tile.url = url;
-  tile.status = "Loaded";
-  return true;
-}
-
-// Enqueues a background download for (zoom, x, y) if it isn't already cached
-// or in flight. Returns immediately; the result is picked up later by
-// ApplyTileResults once the worker thread finishes.
-static void RequestTile(TrackState &state, int zoom, int x, int y) {
-  if (zoom < 0 || zoom > 19)
-    return;
-  int n = 1 << zoom;
-  if (x < 0 || x >= n || y < 0 || y >= n)
-    return;
-
-  auto key = std::make_tuple(zoom, x, y);
-  auto &tile = state.tile_cache[key];
-  if (tile.valid || tile.status == "Loading")
-    return;
-
-  tile.status = "Loading";
-  state.tile_loader->Enqueue(
-      TileRequest{zoom, x, y, BuildSatelliteTileUrl(zoom, x, y)});
-}
-
-// Applies any tile downloads that finished on the worker pool since the last
-// call. Must run on the main thread, since texture creation needs the GL
-// context.
-static void ApplyTileResults(TrackState &state) {
-  for (auto &result : state.tile_loader->DrainResults()) {
-    auto key = std::make_tuple(result.zoom, result.x, result.y);
-    auto &tile = state.tile_cache[key];
-    bool is_active_tile = result.zoom == state.map_tile_zoom &&
-                          result.x == state.map_tile_x &&
-                          result.y == state.map_tile_y;
-
-    if (!result.ok) {
-      tile.status = "Error: " + result.error;
-    } else {
-      std::string error;
-      if (UpdateMapTileTexture(result.image_data, result.url, tile, error)) {
-        if (is_active_tile)
-          state.map_tile_status = "Loaded " + std::to_string(tile.width) + "x" +
-                                  std::to_string(tile.height);
-      } else {
-        tile.status = "Error: " + error;
-      }
-    }
-
-    if (is_active_tile && !tile.valid)
-      state.map_tile_status = tile.status;
-  }
-}
-
-static void EnsureVisibleTilesLoaded(TrackState &state,
-                                     const ImVec2 &canvas_min,
-                                     const ImVec2 &canvas_size) {
-  if (!state.auto_load_tiles)
-    return;
-
-  int zoom = state.map_tile_zoom;
-  auto [tile_xf, tile_yf] =
-      LatLonToTileXY(state.map_tile_lat, state.map_tile_lon, zoom);
-  int center_tx = static_cast<int>(std::floor(tile_xf));
-  int center_ty = static_cast<int>(std::floor(tile_yf));
-  float tile_screen_size = 256.0f * state.view_zoom;
-  int extra_x =
-      static_cast<int>(std::ceil((canvas_size.x * 0.5f) / tile_screen_size)) +
-      1;
-  int extra_y =
-      static_cast<int>(std::ceil((canvas_size.y * 0.5f) / tile_screen_size)) +
-      1;
-  int min_tx = std::max(0, center_tx - extra_x);
-  int max_tx = std::min((1 << zoom) - 1, center_tx + extra_x);
-  int min_ty = std::max(0, center_ty - extra_y);
-  int max_ty = std::min((1 << zoom) - 1, center_ty + extra_y);
-
-  // RequestTile is a cheap no-op for tiles that are already cached or in
-  // flight, so it's fine to ask for the whole visible range every frame;
-  // actual concurrency is bounded by the worker pool in TileLoader.
-  for (int ty = min_ty; ty <= max_ty; ++ty) {
-    for (int tx = min_tx; tx <= max_tx; ++tx) {
-      RequestTile(state, zoom, tx, ty);
-    }
-  }
-}
-
-static void RenderVisibleTiles(const TrackState &state, ImDrawList *draw_list,
-                               const ImVec2 &canvas_min,
-                               const ImVec2 &canvas_size) {
-  int zoom = state.map_tile_zoom;
-  auto [tile_xf, tile_yf] =
-      LatLonToTileXY(state.map_tile_lat, state.map_tile_lon, zoom);
-  int center_tx = static_cast<int>(std::floor(tile_xf));
-  int center_ty = static_cast<int>(std::floor(tile_yf));
-  double frac_x = tile_xf - center_tx;
-  double frac_y = tile_yf - center_ty;
-  float tile_screen_size = 256.0f * state.view_zoom;
-  ImVec2 center_screen =
-      ImVec2(canvas_min.x + canvas_size.x * 0.5f + state.view_offset.x,
-             canvas_min.y + canvas_size.y * 0.5f + state.view_offset.y);
-  ImVec2 origin = ImVec2(center_screen.x - frac_x * tile_screen_size,
-                         center_screen.y - frac_y * tile_screen_size);
-  int extra_x =
-      static_cast<int>(std::ceil((canvas_size.x * 0.5f) / tile_screen_size)) +
-      2;
-  int extra_y =
-      static_cast<int>(std::ceil((canvas_size.y * 0.5f) / tile_screen_size)) +
-      2;
-  int min_tx = std::max(0, center_tx - extra_x);
-  int max_tx = std::min((1 << zoom) - 1, center_tx + extra_x);
-  int min_ty = std::max(0, center_ty - extra_y);
-  int max_ty = std::min((1 << zoom) - 1, center_ty + extra_y);
-
-  for (int ty = min_ty; ty <= max_ty; ++ty) {
-    for (int tx = min_tx; tx <= max_tx; ++tx) {
-      ImVec2 tile_min = ImVec2(origin.x + (tx - center_tx) * tile_screen_size,
-                               origin.y + (ty - center_ty) * tile_screen_size);
-      ImVec2 tile_max =
-          ImVec2(tile_min.x + tile_screen_size, tile_min.y + tile_screen_size);
-      auto key = std::make_tuple(zoom, tx, ty);
-      auto it = state.tile_cache.find(key);
-
-      if (it != state.tile_cache.end() && it->second.valid) {
-        draw_list->AddImage((ImTextureID)(intptr_t)it->second.texture, tile_min,
-                            tile_max, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
-      } else {
-        draw_list->AddRectFilled(tile_min, tile_max, IM_COL32(18, 22, 35, 255));
-        draw_list->AddRect(tile_min, tile_max, IM_COL32(80, 92, 120, 150), 0.0f,
-                           0, 1.0f);
-        if (it != state.tile_cache.end()) {
-          draw_list->AddText(ImVec2(tile_min.x + 4.0f, tile_min.y + 4.0f),
-                             IM_COL32(200, 200, 220, 180),
-                             it->second.status.c_str());
-        }
-      }
-    }
-  }
-}
-
 static ImVec2 WorldToScreen(const TrackPoint &point, const ImVec2 &canvas_min,
                             const ImVec2 &canvas_max, const TrackState &state) {
-  int zoom = state.map_tile_zoom;
-  auto [center_x, center_y] =
-      LatLonToTileXY(state.map_tile_lat, state.map_tile_lon, zoom);
-  auto [point_x, point_y] = LatLonToTileXY(point.lat, point.lon, zoom);
-  float tile_screen_size = 256.0f * state.view_zoom;
-  ImVec2 center =
-      ImVec2((canvas_min.x + canvas_max.x) * 0.5f + state.view_offset.x,
-             (canvas_min.y + canvas_max.y) * 0.5f + state.view_offset.y);
-  return ImVec2(center.x + (point_x - center_x) * tile_screen_size,
-                center.y + (point_y - center_y) * tile_screen_size);
+  return pacer::CanvasFromLatLon(point.lat, point.lon, state.view, canvas_min,
+                                 canvas_max);
 }
 
 static TrackPoint ScreenToWorld(const ImVec2 &screen, const ImVec2 &canvas_min,
                                 const ImVec2 &canvas_max,
                                 const TrackState &state) {
-  int zoom = state.map_tile_zoom;
-  auto [center_x, center_y] =
-      LatLonToTileXY(state.map_tile_lat, state.map_tile_lon, zoom);
-  float tile_screen_size = 256.0f * state.view_zoom;
-  ImVec2 center =
-      ImVec2((canvas_min.x + canvas_max.x) * 0.5f + state.view_offset.x,
-             (canvas_min.y + canvas_max.y) * 0.5f + state.view_offset.y);
-  ImVec2 delta = ImVec2(screen.x - center.x, screen.y - center.y);
-  double point_x = center_x + delta.x / tile_screen_size;
-  double point_y = center_y + delta.y / tile_screen_size;
-  auto [lat, lon] = TileXYToLatLon(zoom, point_x, point_y);
+  auto [lat, lon] =
+      pacer::LatLonFromCanvas(screen, state.view, canvas_min, canvas_max);
   return TrackPoint{static_cast<float>(lat), static_cast<float>(lon)};
 }
 
@@ -580,10 +179,9 @@ static bool ReadSegmentsFromFile(const std::string &filename,
   return true;
 }
 
-// Centers the map on the geometric center of state.segments and resets pan
-// offset. Does not touch view_zoom.
+// Centers the map on the geometric center of state.segments. Does not touch
+// the zoom.
 static void RecenterMapOnSegments(TrackState &state) {
-  state.view_offset = ImVec2(0.0f, 0.0f);
   double sum_lat = 0.0;
   double sum_lon = 0.0;
   int count = 0;
@@ -596,8 +194,8 @@ static void RecenterMapOnSegments(TrackState &state) {
     ++count;
   }
   if (count > 0) {
-    state.map_tile_lat = static_cast<float>(sum_lat / count);
-    state.map_tile_lon = static_cast<float>(sum_lon / count);
+    state.view.lat = sum_lat / count;
+    state.view.lon = sum_lon / count;
   }
 }
 
@@ -609,8 +207,7 @@ static bool LoadState(TrackState &state, const std::string &filename) {
 
   state.segments = std::move(segments);
 
-  // Do not restore view_offset or view_zoom from file. Instead center the map
-  // on the geometric center of the loaded segments and reset pan offset.
+  // The view is not part of the file; center the map on the loaded segments.
   RecenterMapOnSegments(state);
 
   state.selected_segment = -1;
@@ -620,8 +217,8 @@ static bool LoadState(TrackState &state, const std::string &filename) {
   return true;
 }
 
-// Left column: tile/view controls, selected-segment editor, file load/save,
-// and the segment table.
+// Left column: view controls, selected-segment editor, file load/save, and
+// the segment table.
 static void DrawControlPanel(TrackState &state, float width) {
   // Child window (scrollable) so it doesn't scroll the map.
   ImGui::BeginChild("left_panel", ImVec2(width, 0), true,
@@ -633,69 +230,11 @@ static void DrawControlPanel(TrackState &state, float width) {
       "Map: left-click to pan, or left-click and drag a point to move it. "
       "Right-click to place a gate point (first click sets the inner "
       "edge, the next sets the outer edge; the following right-click "
-      "starts a new gate). Scroll to zoom.");
+      "starts a new gate). Scroll to zoom; tiles load automatically.");
   ImGui::Spacing();
 
-  // --- Left column: controls and lists ---
-  ImGui::TextWrapped(
-      "Zoom/Lat/Lon control the satellite tile view. Auto-load visible "
-      "tiles fetches tiles as you pan; Show infill toggles the filled "
-      "track surface; Fetch Satellite Tile grabs the current tile "
-      "manually.");
-  ImGui::Text("Zoom");
-  ImGui::SameLine();
-  ImGui::PushItemWidth(85.0f);
-  ImGui::InputInt("##zoom", &state.map_tile_zoom, 1, 1);
-  ImGui::PopItemWidth();
-  ImGui::SameLine();
-  ImGui::Text("Lat");
-  ImGui::SameLine();
-  ImGui::PushItemWidth(70.0f);
-  ImGui::InputFloat("##lat", &state.map_tile_lat, 0.0f, 0.0f, "%.5f");
-  ImGui::SameLine();
-  ImGui::Text("Lon");
-  ImGui::SameLine();
-  ImGui::InputFloat("##lon", &state.map_tile_lon, 0.0f, 0.0f, "%.5f");
-  ImGui::PopItemWidth();
-
-  state.map_tile_zoom = std::clamp(state.map_tile_zoom, 0, 19);
-  state.map_tile_lat =
-      std::clamp(state.map_tile_lat, -85.05112878f, 85.05112878f);
-  if (state.map_tile_lon < -180.0f)
-    state.map_tile_lon += 360.0f;
-  if (state.map_tile_lon > 180.0f)
-    state.map_tile_lon -= 360.0f;
-
-  ImGui::Checkbox("Auto-load visible tiles", &state.auto_load_tiles);
-  ImGui::Checkbox("Show infill", &state.show_infill);
-  ImGui::SameLine();
-  bool should_fetch_tile = false;
-  if (!state.map_tile_requested) {
-    should_fetch_tile = true;
-    state.map_tile_requested = true;
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Fetch Satellite Tile")) {
-    should_fetch_tile = true;
-  }
-
-  if (should_fetch_tile) {
-    int x = 0, y = 0;
-    std::string url = BuildSatelliteTileUrl(
-        state.map_tile_lat, state.map_tile_lon, state.map_tile_zoom, x, y);
-    state.map_tile_x = x;
-    state.map_tile_y = y;
-    RequestTile(state, state.map_tile_zoom, x, y);
-    state.map_tile_status = "Fetching...";
-    HelloImGui::Log(HelloImGui::LogLevel::Info, "Requested satellite tile %s",
-                    url.c_str());
-  }
-  ImGui::SameLine();
-  ImGui::Text("%s", state.map_tile_status.c_str());
-
-  if (ImGui::Button("Reset View")) {
-    state.view_offset = {0.0f, 0.0f};
-    state.view_zoom = 1.0f;
+  if (ImGui::Button("Recenter")) {
+    RecenterMapOnSegments(state);
   }
   ImGui::SameLine();
   if (ImGui::Button("Reset Track")) {
@@ -714,6 +253,8 @@ static void DrawControlPanel(TrackState &state, float width) {
       state.track_closed = new_closed;
     }
   }
+  ImGui::SameLine();
+  ImGui::Checkbox("Show infill", &state.show_infill);
 
   ImGui::Separator();
 
@@ -788,43 +329,44 @@ static void DrawControlPanel(TrackState &state, float width) {
 
   ImGui::Spacing();
   ImGui::TextWrapped(
-      "Save state / Load state read and write the gates and sector "
-      "markings to the state file below.");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##statefile", &state.state_filename);
-  if (ImGui::Button("Save state##save")) {
-    if (!SaveState(state, state.state_filename)) {
+      "Save / Load read and write the gates and sector markings to the "
+      "selected track file.");
+  state.picker.Draw("track_file");
+  if (ImGui::Button("Save##save")) {
+    if (state.picker.path.empty() ||
+        !SaveState(state, state.picker.path)) {
       state.last_message =
-          "Unable to write state to '" + state.state_filename + "'";
+          "Unable to write state to '" + state.picker.path + "'";
       HelloImGui::Log(HelloImGui::LogLevel::Error, "%s",
                       state.last_message.c_str());
     } else {
-      state.last_message = "Saved state to '" + state.state_filename + "'";
+      state.last_message = "Saved state to '" + state.picker.path + "'";
+      state.picker.Refresh();
       HelloImGui::Log(HelloImGui::LogLevel::Info, "%s",
                       state.last_message.c_str());
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Load state##load")) {
+  if (ImGui::Button("Load##load")) {
     PushUndo(state);
-    if (!LoadState(state, state.state_filename)) {
+    if (!LoadState(state, state.picker.path)) {
       state.undo_stack.pop_back(); // load failed, nothing actually changed
       state.last_message =
-          "Unable to load state from '" + state.state_filename + "'";
+          "Unable to load state from '" + state.picker.path + "'";
       HelloImGui::Log(HelloImGui::LogLevel::Error, "%s",
                       state.last_message.c_str());
       // Try to provide more context: attempt to stat the file from cwd
-      std::ifstream f(state.state_filename);
+      std::ifstream f(state.picker.path);
       if (!f.is_open()) {
         try {
           std::filesystem::path p =
-              std::filesystem::current_path() / state.state_filename;
+              std::filesystem::current_path() / state.picker.path;
           state.last_message += " (tried: " + p.string() + ")";
         } catch (...) {
         }
       }
     } else {
-      state.last_message = "Loaded state from '" + state.state_filename + "'";
+      state.last_message = "Loaded state from '" + state.picker.path + "'";
       HelloImGui::Log(HelloImGui::LogLevel::Info, "%s",
                       state.last_message.c_str());
     }
@@ -903,23 +445,13 @@ static void HandleMapInput(TrackState &state, const ImVec2 &canvas_min,
   float wheel = hovered ? ImGui::GetIO().MouseWheel : 0.0f;
 
   if (wheel != 0.0f) {
-    float old_zoom = state.view_zoom;
-    state.view_zoom =
-        std::clamp(state.view_zoom * (wheel > 0 ? 1.1f : 0.9f), 0.4f, 4.0f);
-    TrackPoint world_at_cursor =
-        ScreenToWorld(mouse_pos, canvas_min, canvas_max, state);
-    if (old_zoom != state.view_zoom) {
-      ImVec2 after_zoom =
-          WorldToScreen(world_at_cursor, canvas_min, canvas_max, state);
-      state.view_offset.x += mouse_pos.x - after_zoom.x;
-      state.view_offset.y += mouse_pos.y - after_zoom.y;
-    }
+    pacer::ZoomCanvasAt(state.view, wheel > 0 ? 1.1f : 0.9f, mouse_pos,
+                        canvas_min, canvas_max);
   }
 
   if (left_drag && state.panning_map) {
     ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-    state.view_offset.x += delta.x;
-    state.view_offset.y += delta.y;
+    pacer::PanCanvas(state.view, delta);
     ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
   }
 
@@ -1104,8 +636,10 @@ static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
   ImGui::Dummy(canvas_size);
   bool hovered = ImGui::IsItemHovered();
 
-  EnsureVisibleTilesLoaded(state, canvas_min, canvas_size);
-  RenderVisibleTiles(state, draw_list, canvas_min, canvas_size);
+  pacer::RequestVisibleCanvasTiles(state.tiles, state.view, canvas_min,
+                                   canvas_max);
+  pacer::RenderCanvasTiles(state.tiles, state.view, draw_list, canvas_min,
+                           canvas_max);
 
   HandleMapInput(state, canvas_min, canvas_max, hovered);
   DrawTrackOverlay(state, draw_list, canvas_min, canvas_max);
@@ -1115,7 +649,7 @@ static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
 }
 
 static void ShowAnnotatorGui(TrackState &state) {
-  ApplyTileResults(state);
+  state.tiles.ApplyResults();
 
   // Platform-native undo shortcut: Cmd+Z / Cmd+Shift+Z on macOS,
   // Ctrl+Z / Ctrl+Shift+Z everywhere else.
@@ -1159,34 +693,36 @@ int main(int argc, char **argv) {
           "Usage: track_annotator [--lat LAT] [--lon LON] [--file PATH]\n"
           "  --lat LAT    initial map center latitude (default 51.376)\n"
           "  --lon LON    initial map center longitude (default -0.361)\n"
-          "  --file PATH  state file to load on startup (if it exists) and\n"
-          "               use as the default Save/Load state path\n"
-          "               (default track_annotation.json)\n");
+          "  --file PATH  track file to load on startup (if it exists) and\n"
+          "               use as the default Save/Load path\n"
+          "               (default track_annotation.json; the picker lists\n"
+          "               tracks/*.json)\n");
       return 0;
     }
   }
 
-  curl_global_init(CURL_GLOBAL_DEFAULT);
   TrackState state;
-  state.tile_loader = std::make_unique<TileLoader>(4);
+  state.view.lat = 51.37600;
+  state.view.lon = -0.36100;
+  state.picker.path = "track_annotation.json";
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--lat" && i + 1 < argc) {
-      state.map_tile_lat = std::stof(argv[++i]);
+      state.view.lat = std::stod(argv[++i]);
     } else if (arg == "--lon" && i + 1 < argc) {
-      state.map_tile_lon = std::stof(argv[++i]);
+      state.view.lon = std::stod(argv[++i]);
     } else if (arg == "--file" && i + 1 < argc) {
-      state.state_filename = argv[++i];
+      state.picker.path = argv[++i];
     }
   }
 
-  if (std::filesystem::exists(state.state_filename)) {
-    if (LoadState(state, state.state_filename)) {
-      state.last_message = "Loaded state from '" + state.state_filename + "'";
+  if (std::filesystem::exists(state.picker.path)) {
+    if (LoadState(state, state.picker.path)) {
+      state.last_message = "Loaded state from '" + state.picker.path + "'";
     } else {
       state.last_message =
-          "Unable to load state from '" + state.state_filename + "'";
+          "Unable to load state from '" + state.picker.path + "'";
     }
   }
 
@@ -1202,9 +738,5 @@ int main(int argc, char **argv) {
   runnerParams.iniFilename = "TrackAnnotator/track_annotator.ini";
   runnerParams.callbacks.ShowGui = [&state] { ShowAnnotatorGui(state); };
   HelloImGui::Run(runnerParams);
-  // Stop and join worker threads before tearing down curl globally, since
-  // curl_global_cleanup must not race with an in-flight curl_easy_perform.
-  state.tile_loader.reset();
-  curl_global_cleanup();
   return 0;
 }

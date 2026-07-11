@@ -7,6 +7,7 @@
 
 #include <pacer/laps/laps.hpp>
 #include <pacer/reference-track/reference-track.hpp>
+#include <pacer/ui/track-picker.hpp>
 
 namespace pacer {
 
@@ -25,9 +26,17 @@ struct LapsDisplay {
 
   std::pair<Point, Point> bounds = {{1, 1}, {0, 0}};
 
-  void DragTimingLine(Segment *s, const char *name, int drag_id);
+  /// True once SetupMap has derived a coordinate system from loaded points,
+  /// i.e. cs maps plot coordinates to real lat/lon.
+  bool HasMapFrame() const;
 
-  void DisplayMap();
+  /// Initializes cs/bounds from the loaded points and fits the plot axes.
+  /// Call right after ImPlot::BeginPlot, before plotting any item.
+  void SetupMap();
+
+  /// Plots the GPS trace plus the start/sector timing lines (read-only;
+  /// edit the geometry in track_annotator).
+  void PlotMapItems();
 
   void DisplayLapTelemetry() const;
 
@@ -38,13 +47,13 @@ struct DeltaLapsComparision {
   ReferenceTrack reference_track;
   CoordinateSystem cs;
 
-  std::string reference_track_filename = "track_annotation.json";
+  TrackFilePicker reference_track_picker;
   std::string reference_track_status;
 
   void PlotSticks();
   void DrawReferenceTrackLoader(Laps &laps);
 
-  std::unordered_set<int> selected_laps = {}; //{19, 24, 28, 35, 36};
+  std::unordered_set<int> selected_laps = {};
 
   void Display(const Laps &laps);
 };
