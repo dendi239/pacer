@@ -43,9 +43,15 @@ public:
   /// Cached tile lookup; returns nullptr for tiles never requested.
   const MapTileImage *Find(int zoom, int x, int y) const;
 
+  /// Number of tiles requested but not yet applied. Lets the app raise its
+  /// idle frame rate while downloads are in flight (the render loop is not
+  /// woken by worker threads), and idle hard once everything has landed.
+  size_t PendingCount() const { return pending_; }
+
 private:
   std::map<std::tuple<int, int, int>, MapTileImage> cache_;
   std::unique_ptr<TileLoader> loader_;
+  size_t pending_ = 0;
 };
 
 } // namespace pacer

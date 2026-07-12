@@ -651,6 +651,12 @@ static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
 static void ShowAnnotatorGui(TrackState &state) {
   state.tiles.ApplyResults();
 
+  // Power save: idle slowly, but poll faster while tile downloads are in
+  // flight -- the worker threads cannot wake the idle event loop, so late
+  // tiles would otherwise only appear on the next slow idle frame.
+  HelloImGui::GetRunnerParams()->fpsIdling.fpsIdle =
+      (state.tiles.PendingCount() > 0) ? 30.f : 3.f;
+
   // Platform-native undo shortcut: Cmd+Z / Cmd+Shift+Z on macOS,
   // Ctrl+Z / Ctrl+Shift+Z everywhere else.
 #ifdef __APPLE__
@@ -734,6 +740,11 @@ int main(int argc, char **argv) {
   runnerParams.imGuiWindowParams.showMenuBar = false;
   runnerParams.imGuiWindowParams.defaultImGuiWindowType =
       HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
+  // Power save: low idle frame rate (raised dynamically in ShowAnnotatorGui
+  // while tiles download). The status bar exposes the idling state and an
+  // on/off checkbox.
+  runnerParams.fpsIdling.fpsIdle = 3.f;
+  runnerParams.imGuiWindowParams.showStatusBar = true;
   runnerParams.iniFolderType = HelloImGui::IniFolderType::AppUserConfigFolder;
   runnerParams.iniFilename = "TrackAnnotator/track_annotator.ini";
   runnerParams.callbacks.ShowGui = [&state] { ShowAnnotatorGui(state); };

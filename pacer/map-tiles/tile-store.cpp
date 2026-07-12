@@ -208,11 +208,13 @@ void TileStore::RequestTile(int zoom, int x, int y) {
     return;
 
   tile.status = "Loading";
+  ++pending_;
   loader_->Enqueue(TileRequest{zoom, x, y, SatelliteTileUrl(zoom, x, y)});
 }
 
 void TileStore::ApplyResults() {
   for (auto &result : loader_->DrainResults()) {
+    --pending_;
     auto &tile = cache_[std::make_tuple(result.zoom, result.x, result.y)];
     if (!result.ok) {
       tile.status = "Error: " + result.error;

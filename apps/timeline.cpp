@@ -104,6 +104,13 @@ int main(int, char **) {
   runnerParams.imGuiWindowParams.showMenu_App = false;
   runnerParams.imGuiWindowParams.showMenu_View = false;
 
+  // Power save: idle at a low frame rate when there is no interaction.
+  // ShowGui below raises this while tile downloads are in flight, since the
+  // worker threads cannot wake the event loop themselves. The status bar
+  // shows the idling state and a checkbox to turn it off.
+  runnerParams.fpsIdling.fpsIdle = 3.f;
+  runnerParams.imGuiWindowParams.showStatusBar = true;
+
   runnerParams.callbacks.ShowMenus = [&]() {
     HelloImGui::ShowViewMenu(runnerParams);
   };
@@ -275,7 +282,14 @@ int main(int, char **) {
       loadFilesWindow, mapWindow,   lapsWindow,
       lapChartWindow,  deltaWindow, lapTelemetryWindow};
 
-  runnerParams.callbacks.ShowGui = [&]() { laps.Update(); };
+  runnerParams.callbacks.ShowGui = [&]() {
+    laps.Update();
+    // Drain finished downloads even when the Map window is not drawn, so
+    // PendingCount() falls back to zero and the idle rate can drop again.
+    tile_store.ApplyResults();
+    HelloImGui::GetRunnerParams()->fpsIdling.fpsIdle =
+        (tile_store.PendingCount() > 0) ? 30.f : 3.f;
+  };
 
   HelloImGui::Run(runnerParams);
 
