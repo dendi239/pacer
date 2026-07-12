@@ -18,12 +18,16 @@ struct ReferenceTrack {
   std::vector<Segment> segments;
   std::vector<int> sector_indices; // ordered indices into segments
 
+  /// How far TimingLine() extends each gate past both annotated edges, in
+  /// meters, so the gate still catches a driven lap that strays slightly
+  /// outside the annotated track boundary. Runtime-only (not saved to the
+  /// track file); tune it in the timeline's reference track loader.
+  double gate_extension_m = 2.0;
+
   size_t Count() const;
   size_t TimingLinesCount() const;
 
-  /// Returns segments[index] extended a couple of meters past each edge, so
-  /// the gate still catches a driven lap that strays slightly outside the
-  /// annotated track boundary.
+  /// Returns segments[index] extended gate_extension_m past each edge.
   Segment TimingLine(size_t index) const;
 
   /// All TimingLine()s densified to roughly one synthetic gate per meter
@@ -64,9 +68,9 @@ struct ReferenceTrack {
   /// sector_indices (in order) as sector splits, converting from this
   /// track's local frame into target_cs (the frame the consuming Laps
   /// object uses). Returns a default (empty) Sectors if segments is empty.
-  /// Uses the raw annotated segments, not the TimingLine-extended ones —
-  /// the gate extension is a delta-calculation robustness hack, not
-  /// something that should silently move where a lap/sector splits.
+  /// Lines are TimingLine-extended by gate_extension_m, same as the delta
+  /// gates, so laps running slightly wide of the annotated track edges
+  /// still register lap/sector splits.
   Sectors BuildSectors(const CoordinateSystem &target_cs) const;
 };
 

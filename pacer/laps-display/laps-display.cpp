@@ -26,12 +26,26 @@ ImPlotPoint pacer::LapsDisplay::ToImPlotPoint(GPSSample s) const {
 static void PlotTimingLine(const char *name, const pacer::Segment &s) {
   double xs[2] = {s.first.x, s.second.x};
   double ys[2] = {s.first.y, s.second.y};
+  ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 3.0f);
   ImPlot::PlotLine(name, xs, ys, 2);
+  ImPlot::PopStyleVar();
   ImPlot::PlotScatter(name, xs, ys, 2);
 }
 
 bool pacer::LapsDisplay::HasMapFrame() const {
+  if (has_supplied_frame)
+    return true;
   return laps && laps->PointCount() > 0 && bounds.first.x < bounds.second.x;
+}
+
+void pacer::LapsDisplay::SetMapFrame(const CoordinateSystem &frame) {
+  cs = frame;
+  has_supplied_frame = true;
+  // Invalidate bounds so the next SetupMap refits the axes in the new frame.
+  bounds = {{1, 1}, {0, 0}};
+  if (laps) {
+    laps->SetCoordinateSystem(cs);
+  }
 }
 
 void pacer::LapsDisplay::SetupMap() {
@@ -40,11 +54,13 @@ void pacer::LapsDisplay::SetupMap() {
       return;
 
     bounds = laps->MinMax();
-    cs = CoordinateSystem(GPSSample{
-        .lat = (bounds.first.y + bounds.second.y) / 2,
-        .lon = (bounds.first.x + bounds.second.x) / 2,
-        .altitude = 0,
-    });
+    if (!has_supplied_frame) {
+      cs = CoordinateSystem(GPSSample{
+          .lat = (bounds.first.y + bounds.second.y) / 2,
+          .lon = (bounds.first.x + bounds.second.x) / 2,
+          .altitude = 0,
+      });
+    }
     laps->SetCoordinateSystem(cs);
     auto min_ = cs.Local(GPSSample{
         .lat = bounds.first.y,
@@ -208,11 +224,24 @@ ImPlotPoint Vec3fToPoint(int index, void *data) {
   return {s[0], s[1]};
 }
 
-void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(Laps &laps) {
+void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(
+    Laps &laps, LapsDisplay &display) {
   bool load = reference_track_picker.Draw("reference_track");
   if (ImGui::Button("Load reference track") &&
       !reference_track_picker.path.empty()) {
     load = true;
+  }
+  ImGui::SetNextItemWidth(120);
+  bool extension_changed = ImGui::SliderFloat(
+      "Gate extension (m)", &gate_extension_m, 0.0f, 10.0f, "%.1f");
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
+    ImGui::SetTooltip("How far each timing gate extends past the annotated "
+                      "track edges,\nso laps running slightly wide still "
+                      "cross it. Affects the delta\nand lap/sector splits.");
+  }
+  reference_track.gate_extension_m = gate_extension_m;
+  if (extension_changed && !reference_track.segments.empty()) {
+    laps.sectors = reference_track.BuildSectors(reference_track.cs);
   }
   if (load) {
     try {
@@ -221,7 +250,11 @@ void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(Laps &laps) {
                                std::to_string(reference_track.segments.size()) +
                                " segments";
       if (!reference_track.segments.empty()) {
-        laps.sectors = reference_track.BuildSectors(cs);
+        // The reference track supplies the map frame; sectors, delta sticks
+        // and the display all share it from here on.
+        display.SetMapFrame(reference_track.cs);
+        cs = reference_track.cs;
+        laps.sectors = reference_track.BuildSectors(reference_track.cs);
         reference_track_status +=
             reference_track.sector_indices.empty()
                 ? " (no sectors marked)."
@@ -240,12 +273,15 @@ void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(Laps &laps) {
 }
 
 void pacer::DeltaLapsComparision::PlotSticks() {
-  for (const auto &seg : reference_track.segments) {
+  ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 3.0f);
+  for (size_t i = 0; i < reference_track.TimingLinesCount(); ++i) {
+    Segment seg = reference_track.TimingLine(i);
     auto a = reference_track.cs.Global(Vec3f{seg.first.x, seg.first.y, 0});
     auto b = reference_track.cs.Global(Vec3f{seg.second.x, seg.second.y, 0});
     Vec3f line[2] = {cs.Local(a), cs.Local(b)};
     ImPlot::PlotLineG("", Vec3fToPoint, line, 2);
   }
+  ImPlot::PopStyleVar();
 }
 
 // std::optional<float>

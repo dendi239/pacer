@@ -10,12 +10,6 @@
 
 namespace {
 
-// Hand-drawn gates are only as wide as the annotated track edges; extending
-// them past each edge makes delta calculation robust to a driven lap
-// straying slightly outside the annotated boundary (noise, imprecise
-// annotation, running wide, etc).
-constexpr double kGateExtensionMeters = 2.0;
-
 // Converts a Segment stored in local coordinates (relative to `cs`) to raw
 // lon/lat Points, matching what pacer::Split() expects when intersecting
 // against a driven lap's raw GPSSample points.
@@ -82,7 +76,7 @@ size_t pacer::ReferenceTrack::TimingLinesCount() const {
 }
 
 pacer::Segment pacer::ReferenceTrack::TimingLine(size_t index) const {
-  return ExtendSegment(segments[index], kGateExtensionMeters);
+  return ExtendSegment(segments[index], gate_extension_m);
 }
 
 std::vector<pacer::Segment> pacer::ReferenceTrack::DensifiedGates() const {
@@ -243,12 +237,12 @@ pacer::ReferenceTrack::BuildSectors(const CoordinateSystem &target_cs) const {
     return Segment{ToPoint(target_cs.Local(a)), ToPoint(target_cs.Local(b))};
   };
 
-  result.start_line = convert(segments[0]);
+  result.start_line = convert(TimingLine(0));
   for (int index : sector_indices) {
     if (index < 0 || static_cast<size_t>(index) >= segments.size()) {
       continue;
     }
-    result.sector_lines.push_back(convert(segments[index]));
+    result.sector_lines.push_back(convert(TimingLine(index)));
   }
   return result;
 }

@@ -7,10 +7,11 @@
 #include <pacer/geometry/geometry.hpp>
 
 void pacer::Laps::Update() {
-  if (sectors.start_line == dirty_start_line_ &&
+  if (!points_dirty_ && sectors.start_line == dirty_start_line_ &&
       sectors.sector_lines == dirty_sector_lines_)
     return;
 
+  points_dirty_ = false;
   dirty_start_line_ = sectors.start_line;
   dirty_sector_lines_ = sectors.sector_lines;
 
@@ -268,4 +269,10 @@ void pacer::Laps::ClearPoints() {
   // keep a single zero entry so AddPoint and SetCoordinateSystem behave
   // consistently (cum_point_dist_[0] == 0)
   cum_point_dist_.assign(1, 0.0);
+  // The old lap/sector chunks index into the cleared points; drop them and
+  // force the next Update() to re-split even if the timing lines are
+  // re-applied unchanged (their frame can outlive the data now).
+  laps_.clear();
+  sectors_.clear();
+  points_dirty_ = true;
 }

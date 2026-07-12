@@ -92,6 +92,9 @@ private:
 
   Segment dirty_start_line_ = {};
   std::vector<Segment> dirty_sector_lines_ = {};
+  // Set by ClearPoints so Update() re-splits even when the timing lines are
+  // re-applied unchanged over freshly loaded points.
+  bool points_dirty_ = false;
 };
 
 } // namespace pacer

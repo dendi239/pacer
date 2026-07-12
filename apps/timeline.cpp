@@ -138,10 +138,14 @@ int main(int, char **) {
           laps_display.bounds = {{1.0, 1.0}, {0.0, 0.0}};
           laps_display.selected_lap = -1;
           delta.selected_laps.clear();
-          // Sectors live in the reference track's coordinate frame; the
-          // map frame is rebuilt for the new data, so they must be
-          // re-applied by loading the reference track again.
-          laps.sectors = pacer::Sectors{};
+          if (delta.reference_track.segments.empty()) {
+            laps.sectors = pacer::Sectors{};
+          } else {
+            // The map frame is supplied by the reference track, so it
+            // survives a data reload; re-apply the sectors in that frame.
+            laps.sectors =
+                delta.reference_track.BuildSectors(delta.reference_track.cs);
+          }
         }
       }
       if (!load_message.empty()) {
@@ -188,7 +192,7 @@ int main(int, char **) {
     delta.cs = laps_display.cs;
 
     if (ImGui::Begin("Laps")) {
-      delta.DrawReferenceTrackLoader(laps);
+      delta.DrawReferenceTrackLoader(laps, laps_display);
       if (laps.PointCount() > 0 && laps.LapsCount() == 0) {
         ImGui::TextWrapped(
             "Load a reference track to split the data into laps and sectors.");
