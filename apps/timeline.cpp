@@ -85,6 +85,7 @@ int main(int, char **) {
   auto laps_display = pacer::LapsDisplay{&laps};
   pacer::DeltaLapsComparision delta;
   pacer::TileStore tile_store;
+  bool show_map_tiles = true;
 
   auto implotContext = ImPlot::CreateContext();
 
@@ -169,9 +170,10 @@ int main(int, char **) {
   mapWindow.canBeClosed = false;
   mapWindow.GuiFunction = [&]() {
     if (ImGui::Begin("Map")) {
+      ImGui::Checkbox("Show map", &show_map_tiles);
       if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
         laps_display.SetupMap();
-        if (laps_display.HasMapFrame()) {
+        if (show_map_tiles && laps_display.HasMapFrame()) {
           pacer::PlotSatelliteTiles(tile_store, laps_display.cs);
         }
         laps_display.PlotMapItems();

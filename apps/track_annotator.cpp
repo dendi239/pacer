@@ -45,6 +45,7 @@ struct TrackState {
   bool dragging_point = false;
   bool panning_map = false;
   bool show_infill = true;
+  bool show_map = true;
   std::string last_message;
 
   pacer::TileCanvasView view;
@@ -255,6 +256,8 @@ static void DrawControlPanel(TrackState &state, float width) {
   }
   ImGui::SameLine();
   ImGui::Checkbox("Show infill", &state.show_infill);
+  ImGui::SameLine();
+  ImGui::Checkbox("Show map", &state.show_map);
 
   ImGui::Separator();
 
@@ -636,10 +639,12 @@ static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
   ImGui::Dummy(canvas_size);
   bool hovered = ImGui::IsItemHovered();
 
-  pacer::RequestVisibleCanvasTiles(state.tiles, state.view, canvas_min,
-                                   canvas_max);
-  pacer::RenderCanvasTiles(state.tiles, state.view, draw_list, canvas_min,
-                           canvas_max);
+  if (state.show_map) {
+    pacer::RequestVisibleCanvasTiles(state.tiles, state.view, canvas_min,
+                                     canvas_max);
+    pacer::RenderCanvasTiles(state.tiles, state.view, draw_list, canvas_min,
+                             canvas_max);
+  }
 
   HandleMapInput(state, canvas_min, canvas_max, hovered);
   DrawTrackOverlay(state, draw_list, canvas_min, canvas_max);
