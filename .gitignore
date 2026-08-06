@@ -14,3 +14,8 @@ pacer-ios/
 # pixi environments
 .pixi
 *.egg-info
+# esp-idf firmware artifacts
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock

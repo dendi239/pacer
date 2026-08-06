@@ -45,11 +45,27 @@ location.
 
 ## Build & flash
 
+Everything runs from the repo's pixi env — `idf.py`'s Python deps are pixi
+pypi-dependencies and `scripts/idf-env.sh` (a pixi activation script) points at
+the ESP-IDF checkout, so there is no `. $IDF_PATH/export.sh` step.
+
 ```bash
-. $IDF_PATH/export.sh   # ESP-IDF >= 5.3
-cd firmware
-idf.py set-target esp32s3
-idf.py build flash monitor
+# once per machine: IDF checkout + xtensa toolchain
+git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf ~/esp/esp-idf
+pixi run fw-setup
+
+pixi run fw-build
+pixi run fw-flash
+pixi run fw-monitor
+pixi run idf menuconfig     # passthrough for any other idf.py command
+```
+
+The firmware is also an optional target of the root CMake project
+(same `firmware/build` tree idf.py uses):
+
+```bash
+pixi run cmake -B build -DPACER_BUILD_FIRMWARE=ON
+pixi run cmake --build build --target firmware
 ```
 
 LVGL and esp_lvgl_port come from the IDF component registry on first build.

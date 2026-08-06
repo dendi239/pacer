@@ -13,8 +13,41 @@ platforms = ["osx-arm64"]
 [tool.pixi.pypi-dependencies]
 # imgui = { path = "bindings/imgui", editable = true }
 pacer = { path = "bindings/pacer", editable = true }
+# ESP-IDF python tooling (requirements.core.txt of IDF v5.5), so idf.py runs
+# straight from this env — no `. $IDF_PATH/export.sh` needed. The IDF checkout
+# location and toolchain PATH come from scripts/idf-env.sh.
+idf-component-manager = "~=2.2"
+esp-coredump = "*"
+esp-idf-kconfig = "*"
+esp-idf-monitor = "*"
+esp-idf-nvs-partition-gen = "*"
+esp-idf-size = "*"
+esp-idf-diag = "*"
+esp-idf-panic-decoder = "*"
+pyclang = "*"
+freertos_gdb = "*"
+pyserial = "*"
+pyelftools = "*"
+pyparsing = "*"
+cryptography = "*"
+construct = "*"
+rich = "*"
+psutil = "*"
+# markdown-it-py 4.x dropped the [linkify] extra some IDF tools request;
+# provide the package directly so IDF's dependency check passes.
+linkify-it-py = "*"
+
+[tool.pixi.activation]
+scripts = ["scripts/idf-env.sh"]
 
 [tool.pixi.tasks]
+# One-time: download xtensa toolchain & friends into $IDF_TOOLS_PATH.
+fw-setup = "python $IDF_PATH/tools/idf_tools.py install --targets esp32s3"
+# Passthrough: `pixi run idf <anything>`, e.g. `pixi run idf menuconfig`.
+idf = "idf.py -C firmware"
+fw-build = "idf.py -C firmware build"
+fw-flash = "idf.py -C firmware flash"
+fw-monitor = "idf.py -C firmware monitor"
 
 [tool.pixi.dependencies]
 cmake = ">=4.0.2,<5"
@@ -28,3 +61,37 @@ python = ">=3.13.5,<4"
 glfw = ">=3.4,<4"
 esptool = ">=5.3.1,<6"
 click = ">=8.4.2,<9"
+universal_pathlib = ">=0.3.10,<0.4"
+requests = ">=2.34.2,<3"
+aiohttp = ">=3.14.3,<4"
+pytest = ">=8.0,<9"
+python-kaleido = ">=1.3.0,<2"
+ruff = ">=0.16.1,<0.17"
+
+[tool.ruff]
+line-length = 88
+extend-exclude = [
+  "3rdparty",
+  "firmware/managed_components",
+  ".pixi",
+  # litgen-generated stubs — sorting them just gets reverted on regeneration.
+  "bindings/*/*/__init__.pyi",
+]
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+# Matches the style already used across the repo: `pacer` sorted as our own
+# package, straight `import x` split from `from x import y` by a blank line,
+# and two blank lines between the import block and the first definition.
+known-first-party = ["pacer"]
+lines-between-types = 1
+lines-after-imports = 2
+
+[tool.pytest.ini_options]
+# Only look under tests/python by default; without this, a bare `pytest`
+# run from the repo root also recurses into vendored trees (3rdparty/,
+# firmware/managed_components/, .pixi/) and picks up their test suites.
+testpaths = ["tests/python"]
+norecursedirs = ["3rdparty", "firmware/managed_components", ".pixi", ".git"]

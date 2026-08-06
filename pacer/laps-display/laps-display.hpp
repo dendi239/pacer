@@ -1,6 +1,8 @@
 #pragma once
 
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "implot.h"
@@ -78,7 +80,62 @@ struct DeltaLapsComparision {
 
   std::unordered_set<int> selected_laps = {};
 
+  /// Stable per-lap color used by the speed trace, delta plot and the
+  /// comparison map, so a lap is recognizable across all three views.
+  static ImVec4 LapColor(int lap_id);
+
   void Display(const Laps &laps);
+
+  //--------------------------- COMPARISON MAP -----------------------------//
+  // The map itself is plotted by the app (it owns the TileStore; the
+  // map-tiles library is desktop-only) as:
+  //   BeginPlot -> SetupComparisonMap -> [PlotSatelliteTiles]
+  //     -> PlotComparisonMap -> EndPlot
+
+  bool show_satellite = true;
+  bool show_reference_track = true;
+
+  /// Fits the plot axes to the reference track once per track load.
+  /// Call right after ImPlot::BeginPlot.
+  void SetupComparisonMap();
+
+  /// Plots the reference track gates and the selected laps' trajectories
+  /// (in this->cs local meters), plus the hover markers. Hovering the plot
+  /// inside the track bounds projects the mouse onto the track middle line
+  /// and shares the resulting distance with the speed/delta plots.
+  void PlotComparisonMap(const Laps &laps);
+
+  //------------------------------- HOVER ----------------------------------//
+
+  /// Publishes a hovered distance along the (best) lap for the current
+  /// frame; every view then draws its own cursor/annotations from it.
+  void SetHoverDistance(double distance);
+
+  /// Distance published this frame or the previous one (views are drawn in
+  /// separate windows, so a consumer may run before this frame's producer).
+  std::optional<double> HoverDistance() const;
+
+private:
+  /// Re-resamples the selected laps and picks the best lap, at most once per
+  /// frame; both Display and PlotComparisonMap call it so each window works
+  /// on current data even when the other one is not drawn.
+  void RefreshResampled(const Laps &laps);
+
+  /// Laps resampled against the reference track, refreshed once per frame
+  /// and shared between the delta plots and the comparison map.
+  std::unordered_map<int, Lap> resampled_laps_;
+  int resample_frame_ = -1;
+  /// Lap (among selected) with the smallest lap time; -1 when none. Its
+  /// cum_distances define the delta plot's x-axis / hover distance domain.
+  int best_lap_id_ = -1;
+
+  double hover_distance_ = 0;
+  int hover_frame_ = -1;
+  bool map_needs_fit_ = true;
+  /// The delta subplots' x-axes are linked (LinkAllX), and ImPlot never
+  /// initial-fits a linked axis — without an explicit fit request they'd
+  /// stay at the default [0,1] range. Set on any selection/track change.
+  bool plots_need_fit_ = true;
 };
 
 } // namespace pacer

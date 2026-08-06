@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_common.h"
 #include "esp_lcd_nv3041a.h"
 #include "esp_lcd_panel_io.h"
@@ -61,6 +62,8 @@ lv_obj_t *s_offset_detail_label = nullptr;
 lv_obj_t *s_logging_page = nullptr;
 lv_obj_t *s_logstats_label = nullptr;
 lv_obj_t *s_logtoggle_label = nullptr;
+lv_obj_t *s_brightness_page = nullptr;
+lv_obj_t *s_brightness_label = nullptr;
 
 // Track map page: outline polylines + position marker, all in screen pixels
 // recomputed from the meter-space data below on every position update.
@@ -98,6 +101,23 @@ constexpr size_t kMapSectorColorCount =
     sizeof(kMapSectorColors) / sizeof(kMapSectorColors[0]);
 std::atomic<bool> s_reload_request{false};
 std::atomic<bool> s_logging_enabled{true};
+
+#if CONFIG_PACER_LCD_BL_GPIO >= 0
+// Backlight PWM. 10-bit duty at 5 kHz keeps the LED driver quiet and gives
+// plenty of resolution for the slider's 100 steps.
+constexpr int kBacklightMinPct = 5; // never let the slider black out the UI
+constexpr int kBacklightDefaultPct = 100;
+constexpr ledc_timer_bit_t kBacklightDutyRes = LEDC_TIMER_10_BIT;
+int s_brightness_pct = kBacklightDefaultPct;
+
+void SetBacklightPct(int pct) {
+  pct = std::clamp(pct, kBacklightMinPct, 100);
+  s_brightness_pct = pct;
+  uint32_t max_duty = (1u << kBacklightDutyRes) - 1;
+  ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, max_duty * pct / 100);
+  ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+#endif
 
 void FormatLapTime(char *buf, size_t n, double seconds) {
   if (std::isnan(seconds)) {
@@ -290,6 +310,9 @@ void OnScreenLongPress(lv_event_t *) {
       lv_obj_has_flag(s_nextline_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_offset_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_logging_page, LV_OBJ_FLAG_HIDDEN) &&
+#if CONFIG_PACER_LCD_BL_GPIO >= 0
+      lv_obj_has_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN) &&
+#endif
       lv_obj_has_flag(s_map_page, LV_OBJ_FLAG_HIDDEN)) {
     ShowMenu(true);
   }
@@ -341,6 +364,38 @@ void OnLoggingBack(lv_event_t *) {
   ShowLoggingPage(false);
   ShowMenu(true);
 }
+
+#if CONFIG_PACER_LCD_BL_GPIO >= 0
+void RefreshBrightnessLabel() {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d%%", s_brightness_pct);
+  lv_label_set_text(s_brightness_label, buf);
+}
+
+void ShowBrightnessPage(bool show) {
+  if (show) {
+    lv_obj_remove_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void OnMenuBrightness(lv_event_t *) {
+  ShowMenu(false);
+  ShowBrightnessPage(true);
+}
+
+void OnBrightnessSlider(lv_event_t *e) {
+  lv_obj_t *slider = (lv_obj_t *)lv_event_get_target(e);
+  SetBacklightPct(lv_slider_get_value(slider));
+  RefreshBrightnessLabel();
+}
+
+void OnBrightnessBack(lv_event_t *) {
+  ShowBrightnessPage(false);
+  ShowMenu(true);
+}
+#endif
 
 void OnMenuClose(lv_event_t *) { ShowMenu(false); }
 
@@ -432,6 +487,9 @@ void BuildDebugMenu(lv_obj_t *scr) {
   MakeButton(s_menu, "Track offset", OnMenuOffset);
   MakeButton(s_menu, "Track map", OnMenuTrackMap);
   MakeButton(s_menu, "Logging", OnMenuLogging);
+#if CONFIG_PACER_LCD_BL_GPIO >= 0
+  MakeButton(s_menu, "Brightness", OnMenuBrightness);
+#endif
   MakeButton(s_menu, "Reload track", OnMenuReload);
   MakeButton(s_menu, "Close", OnMenuClose);
 
@@ -451,6 +509,22 @@ void BuildDebugMenu(lv_obj_t *scr) {
                               0);
   lv_label_set_text(s_offset_detail_label, "--");
   MakeButton(s_offset_page, "Back", OnOffsetBack);
+
+#if CONFIG_PACER_LCD_BL_GPIO >= 0
+  s_brightness_page = MakePanel(scr, "BRIGHTNESS");
+  s_brightness_label = lv_label_create(s_brightness_page);
+  lv_obj_set_style_text_font(s_brightness_label, &lv_font_montserrat_48, 0);
+  RefreshBrightnessLabel();
+  lv_obj_t *slider = lv_slider_create(s_brightness_page);
+  lv_obj_set_width(slider, lv_pct(90));
+  // Extra vertical margin: the default slider is thin and hard to grab.
+  lv_obj_set_style_margin_ver(slider, 12, 0);
+  lv_slider_set_range(slider, kBacklightMinPct, 100);
+  lv_slider_set_value(slider, s_brightness_pct, LV_ANIM_OFF);
+  lv_obj_add_event_cb(slider, OnBrightnessSlider, LV_EVENT_VALUE_CHANGED,
+                      nullptr);
+  MakeButton(s_brightness_page, "Back", OnBrightnessBack);
+#endif
 
   s_logging_page = MakePanel(scr, "LOGGING");
   s_logstats_label = lv_label_create(s_logging_page);
@@ -568,11 +642,22 @@ esp_err_t dashboard_ui_start() {
   ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
 
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
-  gpio_config_t bl_cfg = {};
-  bl_cfg.mode = GPIO_MODE_OUTPUT;
-  bl_cfg.pin_bit_mask = 1ULL << CONFIG_PACER_LCD_BL_GPIO;
-  gpio_config(&bl_cfg);
-  gpio_set_level((gpio_num_t)CONFIG_PACER_LCD_BL_GPIO, 1);
+  ledc_timer_config_t bl_timer = {};
+  bl_timer.speed_mode = LEDC_LOW_SPEED_MODE;
+  bl_timer.timer_num = LEDC_TIMER_0;
+  bl_timer.duty_resolution = kBacklightDutyRes;
+  bl_timer.freq_hz = 5000;
+  bl_timer.clk_cfg = LEDC_AUTO_CLK;
+  ESP_ERROR_CHECK(ledc_timer_config(&bl_timer));
+
+  ledc_channel_config_t bl_channel = {};
+  bl_channel.gpio_num = CONFIG_PACER_LCD_BL_GPIO;
+  bl_channel.speed_mode = LEDC_LOW_SPEED_MODE;
+  bl_channel.channel = LEDC_CHANNEL_0;
+  bl_channel.timer_sel = LEDC_TIMER_0;
+  bl_channel.duty = 0;
+  ESP_ERROR_CHECK(ledc_channel_config(&bl_channel));
+  SetBacklightPct(kBacklightDefaultPct);
 #endif
 
   const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();

@@ -76,7 +76,7 @@ HelloImGui::DockingParams CreateDefaultLayout() {
 }
 
 // Main code
-int main(int, char **) {
+int main(int argc, char **argv) {
   pacer::Laps laps;
 
   std::vector<std::string> load_filenames = {""};
@@ -86,6 +86,45 @@ int main(int, char **) {
   pacer::DeltaLapsComparision delta;
   pacer::TileStore tile_store;
   bool show_map_tiles = true;
+
+  // Dev convenience: `timeline data.MP4 ... track.json --laps 3,5` loads
+  // everything a manual session would click together: data files, the
+  // reference track (any .json argument), and the delta lap selection.
+  {
+    std::vector<std::string> data_files;
+    std::string track_file;
+    for (int i = 1; i < argc; ++i) {
+      std::string arg = argv[i];
+      if (arg == "--laps" && i + 1 < argc) {
+        std::stringstream ss(argv[++i]);
+        for (std::string id; std::getline(ss, id, ',');) {
+          delta.selected_laps.insert(std::stoi(id));
+        }
+      } else if (arg.ends_with(".json")) {
+        track_file = arg;
+      } else {
+        data_files.push_back(arg);
+      }
+    }
+    if (!data_files.empty()) {
+      load_filenames = data_files;
+      LoadLapsFromFiles(&laps, load_filenames, load_message);
+    }
+    if (!track_file.empty()) {
+      delta.reference_track_picker.path = track_file;
+      try {
+        delta.reference_track = pacer::ReferenceTrack::FromFile(track_file);
+        if (!delta.reference_track.segments.empty()) {
+          laps_display.SetMapFrame(delta.reference_track.cs);
+          delta.cs = delta.reference_track.cs;
+          laps.sectors = delta.reference_track.BuildSectors(
+              delta.reference_track.cs);
+        }
+      } catch (const std::exception &e) {
+        load_message += std::string(" Reference track error: ") + e.what();
+      }
+    }
+  }
 
   auto implotContext = ImPlot::CreateContext();
 
@@ -268,6 +307,36 @@ int main(int, char **) {
     ImGui::End();
   };
 
+  // Map view of the delta comparison: the selected laps' trajectories over
+  // the reference track, with hover markers synced to the Delta window.
+  HelloImGui::DockableWindow comparisonMapWindow;
+  comparisonMapWindow.label = "Comparison Map";
+  comparisonMapWindow.dockSpaceName = "RightBottomSpace";
+  comparisonMapWindow.callBeginEnd = false;
+  comparisonMapWindow.canBeClosed = false;
+  comparisonMapWindow.GuiFunction = [&]() {
+    if (ImGui::Begin("Comparison Map")) {
+      if (delta.reference_track.segments.empty()) {
+        ImGui::TextWrapped(
+            "Load a reference track to compare laps on the map.");
+      } else {
+        ImGui::Checkbox("Satellite", &delta.show_satellite);
+        ImGui::SameLine();
+        ImGui::Checkbox("Reference track", &delta.show_reference_track);
+        if (ImPlot::BeginPlot("##comparison_map", ImVec2(-1, -1),
+                              ImPlotFlags_Equal)) {
+          delta.SetupComparisonMap();
+          if (delta.show_satellite) {
+            pacer::PlotSatelliteTiles(tile_store, delta.cs);
+          }
+          delta.PlotComparisonMap(laps);
+          ImPlot::EndPlot();
+        }
+      }
+    }
+    ImGui::End();
+  };
+
   HelloImGui::DockableWindow lapTelemetryWindow;
   lapTelemetryWindow.label = "Lap Telemetry";
   lapTelemetryWindow.dockSpaceName = "RightBottomSpace";
@@ -280,9 +349,11 @@ int main(int, char **) {
     ImGui::End();
   };
 
+  // Windows are docked in list order; the last one docked into a dockspace
+  // becomes its selected tab, so Comparison Map goes after Lap Telemetry.
   runnerParams.dockingParams.dockableWindows = {
-      loadFilesWindow, mapWindow,   lapsWindow,
-      lapChartWindow,  deltaWindow, lapTelemetryWindow};
+      loadFilesWindow, mapWindow,          lapsWindow,         lapChartWindow,
+      deltaWindow,     lapTelemetryWindow, comparisonMapWindow};
 
   runnerParams.callbacks.ShowGui = [&]() {
     laps.Update();

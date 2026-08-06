@@ -35,3 +35,25 @@ endif()
 if(SKBUILD)
     add_subdirectory(bindings)
 endif()
+
+# ESP32-S3 firmware cross-build. Can't be an add_subdirectory (different
+# toolchain), so it's an external project sharing firmware/build with idf.py.
+# Needs the IDF env from scripts/idf-env.sh (activated by pixi).
+option(PACER_BUILD_FIRMWARE "Build the ESP32-S3 firmware (requires ESP-IDF)" OFF)
+if(PACER_BUILD_FIRMWARE)
+    if(NOT DEFINED ENV{IDF_PATH})
+        message(FATAL_ERROR "PACER_BUILD_FIRMWARE needs IDF_PATH set; run under pixi (scripts/idf-env.sh)")
+    endif()
+    include(ExternalProject)
+    ExternalProject_Add(firmware
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/firmware
+        BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/firmware/build
+        CMAKE_GENERATOR Ninja
+        CMAKE_ARGS
+            -DIDF_TARGET=esp32s3
+            -DCMAKE_TOOLCHAIN_FILE=$ENV{IDF_PATH}/tools/cmake/toolchain-esp32s3.cmake
+        BUILD_ALWAYS TRUE
+        INSTALL_COMMAND ""
+        USES_TERMINAL_BUILD TRUE
+    )
+endif()
