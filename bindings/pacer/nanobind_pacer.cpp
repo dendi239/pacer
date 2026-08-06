@@ -279,27 +279,35 @@ void py_init_module_pacer(nb::module_ &m) {
               [](pacer::ReferenceTrack *self,
                  CoordinateSystem cs = CoordinateSystem(),
                  std::vector<Segment> segments = std::vector<Segment>(),
-                 std::vector<int> sector_indices = std::vector<int>()) {
+                 std::vector<int> sector_indices = std::vector<int>(),
+                 double gate_extension_m = 2.0) {
                 new (self) pacer::ReferenceTrack(); // placement new
                 auto r_ctor_ = self;
                 r_ctor_->cs = cs;
                 r_ctor_->segments = segments;
                 r_ctor_->sector_indices = sector_indices;
+                r_ctor_->gate_extension_m = gate_extension_m;
               },
               nb::arg("cs") = CoordinateSystem(),
               nb::arg("segments") = std::vector<Segment>(),
-              nb::arg("sector_indices") = std::vector<int>())
+              nb::arg("sector_indices") = std::vector<int>(),
+              nb::arg("gate_extension_m") = 2.0)
           .def_rw("cs", &pacer::ReferenceTrack::cs, "")
           .def_rw("segments", &pacer::ReferenceTrack::segments, "")
           .def_rw("sector_indices", &pacer::ReferenceTrack::sector_indices,
                   "ordered indices into segments")
+          .def_rw("gate_extension_m", &pacer::ReferenceTrack::gate_extension_m,
+                  "/ How far TimingLine() extends each gate past both "
+                  "annotated edges, in\n/ meters, so the gate still catches a "
+                  "driven lap that strays slightly\n/ outside the annotated "
+                  "track boundary. Runtime-only (not saved to the\n/ track "
+                  "file); tune it in the timeline's reference track loader.")
           .def("count", &pacer::ReferenceTrack::Count)
           .def("timing_lines_count", &pacer::ReferenceTrack::TimingLinesCount)
           .def("timing_line", &pacer::ReferenceTrack::TimingLine,
                nb::arg("index"),
-               "/ Returns segments[index] extended a couple of meters past "
-               "each edge, so\n/ the gate still catches a driven lap that "
-               "strays slightly outside the\n/ annotated track boundary.")
+               "/ Returns segments[index] extended gate_extension_m past each "
+               "edge.")
           .def(
               "densified_gates", &pacer::ReferenceTrack::DensifiedGates,
               "/ All TimingLine()s densified to roughly one synthetic gate per "
@@ -335,17 +343,16 @@ void py_init_module_pacer(nb::module_ &m) {
                nb::arg("filename"),
                "/ Writes this track using the same JSON schema. Throws\n/ "
                "std::runtime_error on failure.")
-          .def(
-              "build_sectors", &pacer::ReferenceTrack::BuildSectors,
-              nb::arg("target_cs"),
-              "/ Builds a pacer::Sectors using segments[0] as the start/finish "
-              "line and\n/ sector_indices (in order) as sector splits, "
-              "converting from this\n/ track's local frame into target_cs (the "
-              "frame the consuming Laps\n/ object uses). Returns a default "
-              "(empty) Sectors if segments is empty.\n/ Uses the raw annotated "
-              "segments, not the TimingLine-extended ones —\n/ the gate "
-              "extension is a delta-calculation robustness hack, not\n/ "
-              "something that should silently move where a lap/sector splits.");
+          .def("build_sectors", &pacer::ReferenceTrack::BuildSectors,
+               nb::arg("target_cs"),
+               "/ Builds a pacer::Sectors using segments[0] as the "
+               "start/finish line and\n/ sector_indices (in order) as sector "
+               "splits, converting from this\n/ track's local frame into "
+               "target_cs (the frame the consuming Laps\n/ object uses). "
+               "Returns a default (empty) Sectors if segments is empty.\n/ "
+               "Lines are TimingLine-extended by gate_extension_m, same as the "
+               "delta\n/ gates, so laps running slightly wide of the annotated "
+               "track edges\n/ still register lap/sector splits.");
   ////////////////////    </generated_from:reference-track.hpp>
   ///////////////////////
 
@@ -408,6 +415,15 @@ void py_init_module_pacer(nb::module_ &m) {
       nb::enum_<pacer::DatVersion>(m, "DatVersion", nb::is_arithmetic(), "")
           .value("just_data", pacer::DatVersion::JUST_DATA, "")
           .value("with_timestamp", pacer::DatVersion::WITH_TIMESTAMP, "");
+
+  m.def("load_gps_files", pacer::LoadGPSFiles, nb::arg("filenames"),
+        nb::arg("on_sample"), nb::arg("errors") = nb::none(),
+        "/ Loads GPS samples from a mix of .dat and GPMF (.mp4 etc.) files, in "
+        "the\n/ given order. Samples that predate embedded timestamps get a "
+        "clock\n/ synthesized from the MP4 chunk spans, chained across files "
+        "so they stay\n/ ordered. Missing/unreadable files are reported "
+        "through `errors` (if\n/ non-null). Returns the number of files "
+        "samples were loaded from.");
   ////////////////////    </generated_from:gps-source.hpp> ////////////////////
 
   ////////////////////    <generated_from:laps-display.hpp> ////////////////////
@@ -422,22 +438,45 @@ void py_init_module_pacer(nb::module_ &m) {
           .def(
               "__init__",
               [](pacer::LapsDisplay *self, int selected_lap = -1,
-                 CoordinateSystem cs = CoordinateSystem()) {
+                 CoordinateSystem cs = CoordinateSystem(),
+                 bool has_supplied_frame = false) {
                 new (self) pacer::LapsDisplay(); // placement new
                 auto r_ctor_ = self;
                 r_ctor_->selected_lap = selected_lap;
                 r_ctor_->cs = cs;
+                r_ctor_->has_supplied_frame = has_supplied_frame;
               },
-              nb::arg("selected_lap") = -1, nb::arg("cs") = CoordinateSystem())
+              nb::arg("selected_lap") = -1, nb::arg("cs") = CoordinateSystem(),
+              nb::arg("has_supplied_frame") = false)
           .def_rw("laps", &pacer::LapsDisplay::laps, "")
           .def_rw("selected_lap", &pacer::LapsDisplay::selected_lap, "")
           .def_rw("cs", &pacer::LapsDisplay::cs, "")
+          .def_rw("has_supplied_frame", &pacer::LapsDisplay::has_supplied_frame,
+                  "/ True once a frame was supplied via SetMapFrame (e.g. by a "
+                  "reference\n/ track); SetupMap then keeps that frame instead "
+                  "of deriving one from\n/ the loaded points.")
           .def("to_im_plot_point", &pacer::LapsDisplay::ToImPlotPoint,
                nb::arg("s"))
           .def_rw("bounds", &pacer::LapsDisplay::bounds, "")
-          .def("drag_timing_line", &pacer::LapsDisplay::DragTimingLine,
-               nb::arg("s"), nb::arg("name"), nb::arg("drag_id"))
-          .def("display_map", &pacer::LapsDisplay::DisplayMap)
+          .def("has_map_frame", &pacer::LapsDisplay::HasMapFrame,
+               "/ True once cs maps plot coordinates to real lat/lon — either "
+               "supplied\n/ via SetMapFrame or derived from loaded points by "
+               "SetupMap.")
+          .def("set_map_frame", &pacer::LapsDisplay::SetMapFrame,
+               nb::arg("frame"),
+               "/ Adopts `frame` as the map coordinate system (typically the "
+               "reference\n/ track's cs, so sectors/delta/display all share "
+               "one frame that outlives\n/ any particular set of loaded data "
+               "files). Propagates it to the laps and\n/ schedules an axis "
+               "refit on the next SetupMap.")
+          .def("setup_map", &pacer::LapsDisplay::SetupMap,
+               "/ Initializes cs/bounds from the loaded points and fits the "
+               "plot axes.\n/ If a frame was supplied via SetMapFrame, only "
+               "the bounds/axes are\n/ refit; the supplied frame is kept.\n/ "
+               "Call right after ImPlot::BeginPlot, before plotting any item.")
+          .def("plot_map_items", &pacer::LapsDisplay::PlotMapItems,
+               "/ Plots the GPS trace plus the start/sector timing lines "
+               "(read-only;\n/ edit the geometry in track_annotator).")
           .def("display_lap_telemetry",
                &pacer::LapsDisplay::DisplayLapTelemetry)
           .def("display_table", &pacer::LapsDisplay::DisplayTable);
@@ -449,37 +488,80 @@ void py_init_module_pacer(nb::module_ &m) {
               [](pacer::DeltaLapsComparision *self,
                  ReferenceTrack reference_track = ReferenceTrack(),
                  CoordinateSystem cs = CoordinateSystem(),
-                 std::string reference_track_filename = "track_annotation.json",
                  std::string reference_track_status = std::string(),
-                 std::unordered_set<int> selected_laps = {}) {
+                 float gate_extension_m = 2.0f,
+                 std::unordered_set<int> selected_laps = {},
+                 bool show_satellite = true, bool show_reference_track = true) {
                 new (self) pacer::DeltaLapsComparision(); // placement new
                 auto r_ctor_ = self;
                 r_ctor_->reference_track = reference_track;
                 r_ctor_->cs = cs;
-                r_ctor_->reference_track_filename = reference_track_filename;
                 r_ctor_->reference_track_status = reference_track_status;
+                r_ctor_->gate_extension_m = gate_extension_m;
                 r_ctor_->selected_laps = selected_laps;
+                r_ctor_->show_satellite = show_satellite;
+                r_ctor_->show_reference_track = show_reference_track;
               },
               nb::arg("reference_track") = ReferenceTrack(),
               nb::arg("cs") = CoordinateSystem(),
-              nb::arg("reference_track_filename") = "track_annotation.json",
               nb::arg("reference_track_status") = std::string(),
-              nb::arg("selected_laps") = std::unordered_set<int>{})
+              nb::arg("gate_extension_m") = 2.0f,
+              nb::arg("selected_laps") = std::unordered_set<int>{},
+              nb::arg("show_satellite") = true,
+              nb::arg("show_reference_track") = true)
           .def_rw("reference_track",
                   &pacer::DeltaLapsComparision::reference_track, "")
           .def_rw("cs", &pacer::DeltaLapsComparision::cs, "")
-          .def_rw("reference_track_filename",
-                  &pacer::DeltaLapsComparision::reference_track_filename, "")
           .def_rw("reference_track_status",
                   &pacer::DeltaLapsComparision::reference_track_status, "")
+          .def_rw("gate_extension_m",
+                  &pacer::DeltaLapsComparision::gate_extension_m,
+                  "/ UI-owned copy of ReferenceTrack::gate_extension_m; "
+                  "survives reloads\n/ (FromFile resets the track to the "
+                  "default) and is re-applied to the\n/ loaded track every "
+                  "frame by DrawReferenceTrackLoader.")
           .def("plot_sticks", &pacer::DeltaLapsComparision::PlotSticks)
           .def("draw_reference_track_loader",
                &pacer::DeltaLapsComparision::DrawReferenceTrackLoader,
-               nb::arg("laps"))
+               nb::arg("laps"), nb::arg("display"),
+               "/ Draws the picker/load UI. On a successful load the reference "
+               "track's\n/ own coordinate system becomes the map frame: it is "
+               "pushed into\n/ `display` (and from there into `laps`), adopted "
+               "as this->cs, and the\n/ sectors are built directly in it.")
           .def_rw("selected_laps", &pacer::DeltaLapsComparision::selected_laps,
-                  "{19, 24, 28, 35, 36};")
+                  "")
+          .def_static("lap_color", &pacer::DeltaLapsComparision::LapColor,
+                      nb::arg("lap_id"),
+                      "/ Stable per-lap color used by the speed trace, delta "
+                      "plot and the\n/ comparison map, so a lap is "
+                      "recognizable across all three views.")
           .def("display", &pacer::DeltaLapsComparision::Display,
-               nb::arg("laps"));
+               nb::arg("laps"))
+          .def_rw("show_satellite",
+                  &pacer::DeltaLapsComparision::show_satellite, "")
+          .def_rw("show_reference_track",
+                  &pacer::DeltaLapsComparision::show_reference_track, "")
+          .def("setup_comparison_map",
+               &pacer::DeltaLapsComparision::SetupComparisonMap,
+               "/ Fits the plot axes to the reference track once per track "
+               "load.\n/ Call right after ImPlot::BeginPlot.")
+          .def("plot_comparison_map",
+               &pacer::DeltaLapsComparision::PlotComparisonMap, nb::arg("laps"),
+               "/ Plots the reference track gates and the selected laps' "
+               "trajectories\n/ (in this->cs local meters), plus the hover "
+               "markers. Hovering the plot\n/ inside the track bounds projects "
+               "the mouse onto the track middle line\n/ and shares the "
+               "resulting distance with the speed/delta plots.")
+          .def("set_hover_distance",
+               &pacer::DeltaLapsComparision::SetHoverDistance,
+               nb::arg("distance"),
+               "/ Publishes a hovered distance along the (best) lap for the "
+               "current\n/ frame; every view then draws its own "
+               "cursor/annotations from it.")
+          .def("hover_distance", &pacer::DeltaLapsComparision::HoverDistance,
+               "/ Distance published this frame or the previous one (views are "
+               "drawn in\n/ separate windows, so a consumer may run before "
+               "this frame's producer).");
   ////////////////////    </generated_from:laps-display.hpp>
   ///////////////////////
 

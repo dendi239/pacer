@@ -1,20 +1,18 @@
 #! /usr/bin/env python3
 
-from pathlib import Path
-from codemanip.code_utils import join_string_by_pipe_char
+import copy
 
-import litgen
 
 # Part of ImGui Bundle - MIT License - Copyright (c) 2022-2025 Pascal Thomet - https://github.com/pthom/imgui_bundle
 from enum import Enum
-import copy
+from pathlib import Path
 
 import litgen
+
 from codemanip.code_replacements import RegexReplacementList
 from codemanip.code_utils import join_string_by_pipe_char
-from srcmlcpp.srcmlcpp_options import WarningType
-
 from litgen.options import LitgenOptions
+from srcmlcpp.srcmlcpp_options import WarningType
 
 
 class ImguiOptionsType(Enum):

@@ -68,6 +68,12 @@ def my_litgen_options() -> litgen.LitgenOptions:
 
     options.class_template_options.add_specialization("PointInTime", ["GPSSample"])
 
+    # TrackFilePicker is a Dear ImGui widget (private scan state, Draw()/Refresh()
+    # methods) with no meaningful Python-side use; excluding it as a member type
+    # keeps litgen from generating a __init__ default for it, which would need a
+    # nanobind type caster that doesn't exist and throws std::bad_cast on import.
+    options.member_exclude_by_type__regex = "^TrackFilePicker$"
+
     options.class_template_options.add_ignore("VectorOperators")
     options.class_template_options.add_ignore("PointwiseOperators")
     options.class_template_options.add_ignore("LinearOperations")
@@ -136,31 +142,38 @@ def autogenerate() -> None:
 def post_process(filepath: Path) -> None:
     """Removes default arguments for object types to avoid memory leaks."""
     content = filepath.read_text()
-    
+
     # List of types that should not have default values in __init__
-    # We want to remove ' = pacer::Type()' or ' = pacer::Type{}' 
+    # We want to remove ' = pacer::Type()' or ' = pacer::Type{}'
     # appearing in lambda dict or nb::arg().
     # Regex match: " = pacer::[A-Za-z0-9_]+(\(\)|\{\})"
-    
+
     import re
     # We carefully only target the generated __init__ lambdas and nb::arg definitions
     # by assuming they look like " = pacer::Type()" or " = pacer::Type{}"
     # We should probably be specific about the types we care about: Point, Segment, Lap, Sectors, CoordinateSystem
-    
+
     types_to_fix = [
-        "Point", "Segment", "Lap", "Sectors", "CoordinateSystem", "GPSSample", "Vec3f", "PointInTime<GPSSample>",
+        "Point",
+        "Segment",
+        "Lap",
+        "Sectors",
+        "CoordinateSystem",
+        "GPSSample",
+        "Vec3f",
+        "PointInTime<GPSSample>",
         "ReferenceTrack",
     ]
-    
+
     for t in types_to_fix:
         # Replace " = pacer::Type()" with ""
         # Regex: space = space pacer::Type\(\)
         # We need to escape the type name which might contain < > etc.
         escaped_type = re.escape(t)
-        
+
         pattern = r" = pacer::" + escaped_type + r"\(\)"
         content = re.sub(pattern, "", content)
-        
+
         # Also handle potential brace init: " = pacer::Type{}"
         pattern_brace = r" = pacer::" + escaped_type + r"\{\}"
         content = re.sub(pattern_brace, "", content)

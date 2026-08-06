@@ -221,6 +221,7 @@ class Laps:
         """
         pass
     # ---------------------------- PRESENTATION -------------------------------//
+
     def set_coordinate_system(self, coordinate_system: CoordinateSystem) -> None:
         pass
 
@@ -263,6 +264,7 @@ class Laps:
     def get_lap(self, lap: int) -> Lap:
         pass
     # ------------------------------- SECTORS ---------------------------------//
+
     def sector_count(self) -> int:
         pass
 
@@ -281,6 +283,7 @@ class Laps:
     def sector_entry_speed(self, sector: int) -> float:
         pass
     # ------------------------------ RAW POINTS -------------------------------//
+
     def add_point(self, s: GPSSample) -> None:
         pass
 
@@ -313,6 +316,12 @@ class ReferenceTrack:
     segments: List[Segment]
     sector_indices: List[int]  # ordered indices into segments
 
+    # / How far TimingLine() extends each gate past both annotated edges, in
+    # / meters, so the gate still catches a driven lap that strays slightly
+    # / outside the annotated track boundary. Runtime-only (not saved to the
+    # / track file); tune it in the timeline's reference track loader.
+    gate_extension_m: float = 2.0
+
     def count(self) -> int:
         pass
 
@@ -320,10 +329,7 @@ class ReferenceTrack:
         pass
 
     def timing_line(self, index: int) -> Segment:
-        """/ Returns segments[index] extended a couple of meters past each edge, so
-        / the gate still catches a driven lap that strays slightly outside the
-        / annotated track boundary.
-        """
+        """/ Returns segments[index] extended gate_extension_m past each edge."""
         pass
 
     def densified_gates(self) -> List[Segment]:
@@ -378,9 +384,9 @@ class ReferenceTrack:
         / sector_indices (in order) as sector splits, converting from this
         / track's local frame into target_cs (the frame the consuming Laps
         / object uses). Returns a default (empty) Sectors if segments is empty.
-        / Uses the raw annotated segments, not the TimingLine-extended ones —
-        / the gate extension is a delta-calculation robustness hack, not
-        / something that should silently move where a lap/sector splits.
+        / Lines are TimingLine-extended by gate_extension_m, same as the delta
+        / gates, so laps running slightly wide of the annotated track edges
+        / still register lap/sector splits.
         """
         pass
 
@@ -389,6 +395,7 @@ class ReferenceTrack:
         cs: CoordinateSystem = CoordinateSystem(),
         segments: List[Segment] = List[Segment](),
         sector_indices: List[int] = List[int](),
+        gate_extension_m: float = 2.0,
     ) -> None:
         """Auto-generated default constructor with named params"""
         pass
@@ -492,6 +499,19 @@ class DatVersion(enum.IntEnum):
     just_data = enum.auto()  # (= 0)
     with_timestamp = enum.auto()  # (= 1)
 
+def load_gps_files(
+    filenames: List[str],
+    on_sample: Callable[[GPSSample], None],
+    errors: Optional[List[str]] = None,
+) -> int:
+    """/ Loads GPS samples from a mix of .dat and GPMF (.mp4 etc.) files, in the
+    / given order. Samples that predate embedded timestamps get a clock
+    / synthesized from the MP4 chunk spans, chained across files so they stay
+    / ordered. Missing/unreadable files are reported through `errors` (if
+    / non-null). Returns the number of files samples were loaded from.
+    """
+    pass
+
 ####################    </generated_from:gps-source.hpp>    ####################
 
 ####################    <generated_from:laps-display.hpp>    ####################
@@ -509,14 +529,41 @@ class LapsDisplay:
 
     cs: CoordinateSystem
 
+    # / True once a frame was supplied via SetMapFrame (e.g. by a reference
+    # / track); SetupMap then keeps that frame instead of deriving one from
+    # / the loaded points.
+    has_supplied_frame: bool = False
+
     def to_im_plot_point(self, s: GPSSample) -> ImPlotPoint:
         pass
     bounds: Tuple[Point, Point] = Tuple[Point, Point]({1, 1}, {0, 0})
 
-    def drag_timing_line(self, s: Segment, name: str, drag_id: int) -> None:
+    def has_map_frame(self) -> bool:
+        """/ True once cs maps plot coordinates to real lat/lon — either supplied
+        / via SetMapFrame or derived from loaded points by SetupMap.
+        """
         pass
 
-    def display_map(self) -> None:
+    def set_map_frame(self, frame: CoordinateSystem) -> None:
+        """/ Adopts `frame` as the map coordinate system (typically the reference
+        / track's cs, so sectors/delta/display all share one frame that outlives
+        / any particular set of loaded data files). Propagates it to the laps and
+        / schedules an axis refit on the next SetupMap.
+        """
+        pass
+
+    def setup_map(self) -> None:
+        """/ Initializes cs/bounds from the loaded points and fits the plot axes.
+        / If a frame was supplied via SetMapFrame, only the bounds/axes are
+        / refit; the supplied frame is kept.
+        / Call right after ImPlot::BeginPlot, before plotting any item.
+        """
+        pass
+
+    def plot_map_items(self) -> None:
+        """/ Plots the GPS trace plus the start/sector timing lines (read-only;
+        / edit the geometry in track_annotator).
+        """
         pass
 
     def display_lap_telemetry(self) -> None:
@@ -526,7 +573,10 @@ class LapsDisplay:
         pass
 
     def __init__(
-        self, selected_lap: int = -1, cs: CoordinateSystem = CoordinateSystem()
+        self,
+        selected_lap: int = -1,
+        cs: CoordinateSystem = CoordinateSystem(),
+        has_supplied_frame: bool = False,
     ) -> None:
         """Auto-generated default constructor with named params"""
         pass
@@ -535,28 +585,79 @@ class DeltaLapsComparision:
     reference_track: ReferenceTrack
     cs: CoordinateSystem
 
-    reference_track_filename: str = "track_annotation.json"
     reference_track_status: str
+
+    # / UI-owned copy of ReferenceTrack::gate_extension_m; survives reloads
+    # / (FromFile resets the track to the default) and is re-applied to the
+    # / loaded track every frame by DrawReferenceTrackLoader.
+    gate_extension_m: float = 2.0
 
     def plot_sticks(self) -> None:
         pass
 
-    def draw_reference_track_loader(self, laps: Laps) -> None:
+    def draw_reference_track_loader(self, laps: Laps, display: LapsDisplay) -> None:
+        """/ Draws the picker/load UI. On a successful load the reference track's
+        / own coordinate system becomes the map frame: it is pushed into
+        / `display` (and from there into `laps`), adopted as this->cs, and the
+        / sectors are built directly in it.
+        """
         pass
-    selected_laps: std.unordered_set[int] = (
-        std.unordered_set < int > ()
-    )  # {19, 24, 28, 35, 36};
+    selected_laps: std.unordered_set[int] = std.unordered_set < int > ()
+
+    @staticmethod
+    def lap_color(lap_id: int) -> ImVec4:
+        """/ Stable per-lap color used by the speed trace, delta plot and the
+        / comparison map, so a lap is recognizable across all three views.
+        """
+        pass
 
     def display(self, laps: Laps) -> None:
+        pass
+    # --------------------------- COMPARISON MAP -----------------------------//
+    # The map itself is plotted by the app (it owns the TileStore; the
+    # map-tiles library is desktop-only) as:
+    #   BeginPlot -> SetupComparisonMap -> [PlotSatelliteTiles]
+    #     -> PlotComparisonMap -> EndPlot
+
+    show_satellite: bool = True
+    show_reference_track: bool = True
+
+    def setup_comparison_map(self) -> None:
+        """/ Fits the plot axes to the reference track once per track load.
+        / Call right after ImPlot::BeginPlot.
+        """
+        pass
+
+    def plot_comparison_map(self, laps: Laps) -> None:
+        """/ Plots the reference track gates and the selected laps' trajectories
+        / (in this->cs local meters), plus the hover markers. Hovering the plot
+        / inside the track bounds projects the mouse onto the track middle line
+        / and shares the resulting distance with the speed/delta plots.
+        """
+        pass
+    # ------------------------------- HOVER ----------------------------------//
+
+    def set_hover_distance(self, distance: float) -> None:
+        """/ Publishes a hovered distance along the (best) lap for the current
+        / frame; every view then draws its own cursor/annotations from it.
+        """
+        pass
+
+    def hover_distance(self) -> Optional[float]:
+        """/ Distance published this frame or the previous one (views are drawn in
+        / separate windows, so a consumer may run before this frame's producer).
+        """
         pass
 
     def __init__(
         self,
         reference_track: ReferenceTrack = ReferenceTrack(),
         cs: CoordinateSystem = CoordinateSystem(),
-        reference_track_filename: str = "track_annotation.json",
         reference_track_status: str = "",
+        gate_extension_m: float = 2.0,
         selected_laps: std.unordered_set[int] = std.unordered_set < int > (),
+        show_satellite: bool = True,
+        show_reference_track: bool = True,
     ) -> None:
         """Auto-generated default constructor with named params"""
         pass
