@@ -11,11 +11,26 @@ void pacer::LiveTiming::SetReferenceTrack(const ReferenceTrack &rt,
                                           SessionConfig cfg) {
   cfg_ = cfg;
 
-  gates_.clear();
-  for (const Segment &local : rt.DensifiedGates()) {
-    gates_.push_back(rt.ToGlobal(local));
-  }
+  // Release the previous track's gates before building the new one, then
+  // convert the densified gates in place and adopt the vector rather than
+  // copying it across. At ~1 gate/m these vectors are tens of KB each
+  // (a 1.1 km circuit is ~35 KB), so holding the old set, the densified set
+  // and a growing copy at the same time is what made loading a second track
+  // throw std::bad_alloc on the ESP32.
+  gates_ = std::vector<Segment>{};
+  current_gate_times_ = std::vector<double>{};
+  best_gate_times_ = std::vector<double>{};
 
+  std::vector<Segment> gates = rt.DensifiedGates();
+  for (Segment &gate : gates) {
+    gate = rt.ToGlobal(gate);
+  }
+  gates_ = std::move(gates);
+
+  ResetSession();
+}
+
+void pacer::LiveTiming::ResetSession() {
   has_prev_ = false;
   on_lap_ = false;
   next_gate_ = 0;
@@ -132,7 +147,7 @@ void pacer::LiveTiming::OnSample(GPSSample s) {
       StartLap(split->timestamp_ms / 1000.0);
     }
   } else {
-    // At 25 Hz a kart covers a couple of meters per sample, so one interval
+    // A kart covers a couple of meters per sample, so one interval
     // can cross several ~1 m gates; keep consuming crossings until none of
     // the upcoming gates intersects this segment. Gates are ordered along
     // the track, so the first hit in the window is the next one crossed.

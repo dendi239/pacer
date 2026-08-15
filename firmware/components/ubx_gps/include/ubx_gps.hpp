@@ -1,8 +1,9 @@
 #pragma once
 
 // u-blox GPS over UART: configures the receiver for 25 Hz UBX-NAV-PVT
-// output and runs a reader task that decodes each frame into the same
-// uGnssDecUbxNavPvt_t struct the desktop .dat pipeline uses.
+// output on GPS L1C/A only (the M10 won't hold 25 Hz with more than one
+// constellation) and runs a reader task that decodes each frame into the
+// same uGnssDecUbxNavPvt_t struct the desktop .dat pipeline uses.
 
 #include "esp_err.h"
 

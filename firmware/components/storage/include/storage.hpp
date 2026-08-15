@@ -9,6 +9,7 @@
 //                                 desktop tools already read.
 
 #include <string>
+#include <vector>
 
 #include "esp_err.h"
 
@@ -43,3 +44,8 @@ void storage_log_flush();
 std::string storage_find_track(double lat, double lon,
                                double *distance_m_out = nullptr,
                                std::string *debug_out = nullptr);
+
+/// Paths of every /sdcard/tracks/*.json, sorted by file name. Nothing is
+/// parsed — the picker only needs names, and a broken file reports itself
+/// when it's actually loaded.
+std::vector<std::string> storage_list_tracks();

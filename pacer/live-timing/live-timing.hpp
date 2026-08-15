@@ -11,7 +11,7 @@
 namespace pacer {
 
 // Incremental, sample-by-sample counterpart of Laps::Update() +
-// ReferenceTrack::Resample(): consumes a live 25 Hz GPS stream and keeps
+// ReferenceTrack::Resample(): consumes a live 10-25 Hz GPS stream and keeps
 // current/last/best lap times plus a running delta to the session-best lap,
 // measured at the same densified gates Resample() uses. Holds no point
 // history — memory is two gate-time arrays — so it runs happily on an ESP32.
@@ -96,6 +96,12 @@ public:
   /// and finishes laps.
   void SetReferenceTrack(const ReferenceTrack &rt, SessionConfig cfg = {});
 
+  /// Starts the session over on the track already installed: lap numbering,
+  /// lap/session clocks and the delta reference all go back to where
+  /// SetReferenceTrack() left them, without re-parsing the track. The next
+  /// start-line crossing begins lap 1 again.
+  void ResetSession();
+
   /// Feed one GPS fix; `s.timestamp_ms` must be milliseconds on a monotonic
   /// clock consistent across the session (e.g. UBX iTOW).
   void OnSample(GPSSample s);
@@ -109,7 +115,7 @@ public:
   double DistanceToNextLine(const GPSSample &s) const;
 
   /// Offset of `s` relative to the nearest densified gate (see TrackOffset).
-  /// Scans every gate, so call it at UI rate — not per 25 Hz sample — and
+  /// Scans every gate, so call it at UI rate — not per GPS sample — and
   /// only while someone is looking. nullopt when no track is installed.
   std::optional<TrackOffset> OffsetFromTrack(const GPSSample &s) const;
 

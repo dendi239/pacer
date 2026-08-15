@@ -10,6 +10,7 @@
 //   [status: sats / track / logging]
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "esp_err.h"
@@ -28,9 +29,30 @@ void dashboard_ui_set_status(const char *text);
 /// Debug readout in the bottom-right corner (raw lat/lon/speed).
 void dashboard_ui_set_debug(const char *text);
 
-/// True exactly once after the user picks "Reload track" in the debug menu
-/// (long press -> menu); the main loop polls this.
-bool dashboard_ui_consume_track_reload();
+/// True exactly once after the user picks an entry on the debug menu's
+/// "Reload track" page (long press -> menu -> Reload track); the main loop
+/// polls this. `path_out` gets the chosen track file, or an empty string for
+/// "Nearest (auto)", i.e. the usual scan of /sdcard/tracks.
+bool dashboard_ui_consume_track_reload(std::string *path_out = nullptr);
+
+/// One entry of the debug menu's track picker.
+struct DashboardTrack {
+  /// Track file; handed back by dashboard_ui_consume_track_reload. Only the
+  /// file name (minus the .json) is shown.
+  std::string path;
+  /// Closed outline for the tile's thumbnail, in any local metric frame (the
+  /// UI fits it to the thumbnail on its own). Keep it short — every point is
+  /// held for as long as the entry is listed. Empty draws no thumbnail,
+  /// which is what a file that wouldn't parse gets.
+  std::vector<pacer::Point> outline;
+};
+
+/// Fills the full-screen "Reload track" page with one tile per track, after
+/// the always-present "Nearest (auto)" tile. `active_path` is drawn as the
+/// loaded one (green outline and border); pass an empty string for none.
+/// Safe to call from any task (locks LVGL).
+void dashboard_ui_set_track_list(const std::vector<DashboardTrack> &tracks,
+                                 const std::string &active_path = {});
 
 /// Live value for the debug menu's "next timing line" page; NaN shows
 /// "no track". Cheap no-op while that page is closed.

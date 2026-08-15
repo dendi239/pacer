@@ -141,6 +141,36 @@ constexpr uint32_t kKeyUart1OutUbx = 0x10740001;    // bool
 constexpr uint32_t kKeyUart1OutNmea = 0x10740002;   // bool
 constexpr uint32_t kKeyUart1Baud = 0x40520001;      // U4
 
+// CFG-SIGNAL (all bool). The M10 only reaches 25 Hz on a single
+// constellation — with GLONASS/Galileo/BeiDou tracking it clamps the
+// solution rate well below the 40 ms we ask for — so keep GPS L1C/A and
+// switch every other GNSS off. Both the per-constellation *_ENA and its
+// signal keys have to go, otherwise the receiver keeps the band alive.
+constexpr uint32_t kKeySigGpsEna = 0x1031001F;
+constexpr uint32_t kKeySigGpsL1caEna = 0x10310001;
+constexpr uint32_t kKeySigSbasEna = 0x10310020;
+constexpr uint32_t kKeySigSbasL1caEna = 0x10310005;
+constexpr uint32_t kKeySigGalEna = 0x10310021;
+constexpr uint32_t kKeySigGalE1Ena = 0x10310007;
+constexpr uint32_t kKeySigBdsEna = 0x10310022;
+constexpr uint32_t kKeySigBdsB1Ena = 0x1031000D;
+constexpr uint32_t kKeySigBdsB1cEna = 0x1031000F;
+constexpr uint32_t kKeySigQzssEna = 0x10310024;
+constexpr uint32_t kKeySigQzssL1caEna = 0x10310012;
+constexpr uint32_t kKeySigQzssL1sEna = 0x10310014;
+constexpr uint32_t kKeySigGloEna = 0x10310025;
+constexpr uint32_t kKeySigGloL1Ena = 0x10310018;
+
+constexpr CfgItem kGpsOnlySignals[] = {
+    {kKeySigGpsEna, 1, 1},      {kKeySigGpsL1caEna, 1, 1},
+    {kKeySigSbasEna, 0, 1},     {kKeySigSbasL1caEna, 0, 1},
+    {kKeySigGalEna, 0, 1},      {kKeySigGalE1Ena, 0, 1},
+    {kKeySigBdsEna, 0, 1},      {kKeySigBdsB1Ena, 0, 1},
+    {kKeySigBdsB1cEna, 0, 1},   {kKeySigQzssEna, 0, 1},
+    {kKeySigQzssL1caEna, 0, 1}, {kKeySigQzssL1sEna, 0, 1},
+    {kKeySigGloEna, 0, 1},      {kKeySigGloL1Ena, 0, 1},
+};
+
 void push_config(bool include_baud) {
   CfgItem items[5];
   size_t n = 0;
@@ -152,6 +182,13 @@ void push_config(bool include_baud) {
   items[n++] = {kKeyRateMeas, 40, 2}; // 40 ms -> 25 Hz
   items[n++] = {kKeyMsgoutPvtUart1, 1, 1};
   send_valset(items, n);
+
+  // Separate VALSET: one NAK rejects the whole set, and a receiver that
+  // doesn't know a given signal key shouldn't cost us the port/rate config
+  // above. Changing the constellations restarts the GNSS subsystem, so this
+  // goes last.
+  send_valset(kGpsOnlySignals,
+              sizeof(kGpsOnlySignals) / sizeof(kGpsOnlySignals[0]));
 }
 
 //------------------------------ reader task -------------------------------//

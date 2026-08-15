@@ -45,15 +45,28 @@ DensifyGates(const std::vector<pacer::Segment> &gates) {
     return gates;
   }
 
-  std::vector<pacer::Segment> dense;
-  for (size_t i = 0; i + 1 < gates.size(); ++i) {
-    const pacer::Segment &g1 = gates[i];
-    const pacer::Segment &g2 = gates[i + 1];
+  // Roughly one gate per meter between each annotated pair.
+  auto steps_between = [](const pacer::Segment &g1, const pacer::Segment &g2) {
     pacer::Point mid1 = (g1.first + g1.second) / 2.0;
     pacer::Point mid2 = (g2.first + g2.second) / 2.0;
     double distance = std::sqrt((mid2 - mid1).Norm());
-    size_t steps =
-        std::max<size_t>(1, static_cast<size_t>(std::ceil(distance)));
+    return std::max<size_t>(1, static_cast<size_t>(std::ceil(distance)));
+  };
+
+  // Counting first costs one cheap pass and saves the growth overshoot: a
+  // 1.1 km circuit densifies to ~1100 segments, and letting the vector
+  // double its way there wastes ~30 KB of heap the ESP32 doesn't have.
+  size_t total = 1;
+  for (size_t i = 0; i + 1 < gates.size(); ++i) {
+    total += steps_between(gates[i], gates[i + 1]);
+  }
+
+  std::vector<pacer::Segment> dense;
+  dense.reserve(total);
+  for (size_t i = 0; i + 1 < gates.size(); ++i) {
+    const pacer::Segment &g1 = gates[i];
+    const pacer::Segment &g2 = gates[i + 1];
+    size_t steps = steps_between(g1, g2);
 
     for (size_t k = 0; k < steps; ++k) {
       double t = static_cast<double>(k) / static_cast<double>(steps);

@@ -23,6 +23,19 @@ typedef enum {
   U_GNSS_DEC_UBX_NAV_PVT_FIX_TYPE_TIME_ONLY = 5
 } uGnssDecUbxNavPvtFixType_t;
 
+/** Bits of the "flags" field of #uGnssDecUbxNavPvt_t.
+ */
+typedef enum {
+  U_GNSS_DEC_UBX_NAV_PVT_FLAGS_GNSS_FIX_OK = 0x01,   /**< the receiver's own
+                                                          "solution passed all
+                                                          validity checks" bit;
+                                                          fixType goes 2D/3D
+                                                          before this does. */
+  U_GNSS_DEC_UBX_NAV_PVT_FLAGS_DIFF_SOLN = 0x02,     /**< differential
+                                                          corrections applied. */
+  U_GNSS_DEC_UBX_NAV_PVT_FLAGS_HEAD_VEH_VALID = 0x20 /**< headVeh is valid. */
+} uGnssDecUbxNavPvtFlags_t;
+
 /** UBX-NAV-PVT message structure; the naming and type of each
  * element follows that of the interface manual.
  */

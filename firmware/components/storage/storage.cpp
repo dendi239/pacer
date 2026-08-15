@@ -1,5 +1,6 @@
 #include "storage.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <dirent.h>
 #include <fstream>
@@ -224,4 +225,24 @@ std::string storage_find_track(double lat, double lon, double *distance_m_out,
     *distance_m_out = best_dist;
   }
   return best_path;
+}
+
+std::vector<std::string> storage_list_tracks() {
+  std::vector<std::string> paths;
+  DIR *dir = opendir("/sdcard/tracks");
+  if (!dir) {
+    return paths;
+  }
+  while (dirent *entry = readdir(dir)) {
+    std::string name = entry->d_name;
+    if (name == "." || name == ".." || !has_json_ext(name)) {
+      continue;
+    }
+    paths.push_back(std::string("/sdcard/tracks/") + name);
+  }
+  closedir(dir);
+  // readdir order is whatever FAT happens to hold; the picker should look
+  // the same every time it's opened.
+  std::sort(paths.begin(), paths.end());
+  return paths;
 }

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "driver/gpio.h"
@@ -41,8 +42,14 @@ constexpr bool kMirrorY = true;
 #else
 constexpr bool kMirrorY = true;
 #endif
+#ifdef CONFIG_PACER_LCD_INVERT_COLORS
+constexpr bool kInvertColorsDefault = true;
+#else
+constexpr bool kInvertColorsDefault = false;
+#endif
 
 lv_display_t *s_disp = nullptr;
+esp_lcd_panel_handle_t s_panel = nullptr;
 lv_obj_t *s_lap_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
 lv_obj_t *s_delta_label = nullptr;
@@ -64,6 +71,31 @@ lv_obj_t *s_logstats_label = nullptr;
 lv_obj_t *s_logtoggle_label = nullptr;
 lv_obj_t *s_brightness_page = nullptr;
 lv_obj_t *s_brightness_label = nullptr;
+lv_obj_t *s_invert_label = nullptr;
+
+// Track picker page: "Nearest (auto)" plus one tile per track the main loop
+// found on the card, each showing that track's own outline. The tiles are
+// rebuilt on every dashboard_ui_set_track_list; a tile's user_data is its
+// index into s_tracks (kTrackPickAuto for the auto entry). The thumbnail
+// pixels live in s_track_thumb_px because lv_line only keeps a pointer to
+// them — the outer vector is sized once per rebuild so the inner buffers
+// can't move under the lines. LVGL task only.
+lv_obj_t *s_track_page = nullptr;
+lv_obj_t *s_track_list = nullptr;
+std::vector<DashboardTrack> s_tracks;
+std::vector<std::vector<lv_point_precise_t>> s_track_thumb_px;
+constexpr intptr_t kTrackPickAuto = -1;
+// Tiles are sized so a 480x272 screen holds a 3x2 grid inside the page's
+// 8 px padding (3*148 + 2*8 gaps = 460 wide), which covers the auto entry
+// plus five tracks without scrolling.
+constexpr int32_t kTileW = 148;
+constexpr int32_t kTileH = 100;
+constexpr int32_t kThumbW = 128;
+constexpr int32_t kThumbH = 64;
+
+// Panel-level color inversion (INVON/INVOFF); the Kconfig option only picks
+// the value it starts at. Touched from the LVGL task only.
+bool s_invert_colors = kInvertColorsDefault;
 
 // Track map page: outline polylines + position marker, all in screen pixels
 // recomputed from the meter-space data below on every position update.
@@ -100,6 +132,9 @@ const lv_color_t kMapSectorColors[] = {
 constexpr size_t kMapSectorColorCount =
     sizeof(kMapSectorColors) / sizeof(kMapSectorColors[0]);
 std::atomic<bool> s_reload_request{false};
+// The track picked alongside s_reload_request (empty = nearest/auto). Written
+// from the LVGL task, read by the main loop under the LVGL lock.
+std::string s_reload_path;
 std::atomic<bool> s_logging_enabled{true};
 
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
@@ -162,6 +197,14 @@ void ShowOffsetPage(bool show) {
     lv_obj_remove_flag(s_offset_page, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(s_offset_page, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void ShowTrackPage(bool show) {
+  if (show) {
+    lv_obj_remove_flag(s_track_page, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(s_track_page, LV_OBJ_FLAG_HIDDEN);
   }
 }
 
@@ -310,6 +353,7 @@ void OnScreenLongPress(lv_event_t *) {
       lv_obj_has_flag(s_nextline_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_offset_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_logging_page, LV_OBJ_FLAG_HIDDEN) &&
+      lv_obj_has_flag(s_track_page, LV_OBJ_FLAG_HIDDEN) &&
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
       lv_obj_has_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN) &&
 #endif
@@ -346,8 +390,24 @@ void OnMapClicked(lv_event_t *) {
 }
 
 void OnMenuReload(lv_event_t *) {
-  s_reload_request = true;
   ShowMenu(false);
+  ShowTrackPage(true);
+}
+
+// One entry of the track picker; the reload lands on the main loop, which
+// does the loading, so the page just closes back to the dashboard.
+void OnTrackPick(lv_event_t *e) {
+  intptr_t idx = (intptr_t)lv_event_get_user_data(e);
+  s_reload_path = idx >= 0 && (size_t)idx < s_tracks.size()
+                      ? s_tracks[idx].path
+                      : std::string();
+  s_reload_request = true;
+  ShowTrackPage(false);
+}
+
+void OnTrackBack(lv_event_t *) {
+  ShowTrackPage(false);
+  ShowMenu(true);
 }
 
 void OnMenuLogging(lv_event_t *) {
@@ -363,6 +423,19 @@ void OnLogToggle(lv_event_t *) {
 void OnLoggingBack(lv_event_t *) {
   ShowLoggingPage(false);
   ShowMenu(true);
+}
+
+void RefreshInvertLabel() {
+  lv_label_set_text(s_invert_label,
+                    s_invert_colors ? "Colors: inverted" : "Colors: normal");
+}
+
+// Toggles in place, menu stays open: the panel repaints instantly, so the
+// button doubles as the preview.
+void OnMenuInvert(lv_event_t *) {
+  s_invert_colors = !s_invert_colors;
+  esp_lcd_panel_invert_color(s_panel, s_invert_colors);
+  RefreshInvertLabel();
 }
 
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
@@ -424,15 +497,188 @@ lv_obj_t *MakePanel(lv_obj_t *scr, const char *title) {
   return panel;
 }
 
-lv_obj_t *MakeButton(lv_obj_t *parent, const char *text, lv_event_cb_t cb) {
+lv_obj_t *MakeButton(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
+                     void *user_data = nullptr) {
   lv_obj_t *btn = lv_button_create(parent);
   lv_obj_set_width(btn, lv_pct(100));
-  lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
   lv_obj_t *label = lv_label_create(btn);
   lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
   lv_label_set_text(label, text);
   lv_obj_center(label);
   return btn;
+}
+
+// "/sdcard/tracks/brands-hatch.json" -> "brands-hatch": the directory is
+// always the same and the extension is always .json, so neither earns any of
+// the tile's width.
+std::string TrackDisplayName(const std::string &path) {
+  size_t slash = path.rfind('/');
+  std::string name =
+      slash == std::string::npos ? path : path.substr(slash + 1);
+  if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0) {
+    name.resize(name.size() - 5);
+  }
+  return name;
+}
+
+// Projects a metric outline into a kThumbW x kThumbH box: uniform scale to
+// fit with a small margin, centered, north up (screen y grows down, so y is
+// flipped). Same fit as the full map page, minus the position marker.
+// Returns false if there is nothing worth drawing.
+bool FitThumbnail(const std::vector<pacer::Point> &outline,
+                  std::vector<lv_point_precise_t> *px) {
+  if (outline.size() < 3) {
+    return false;
+  }
+  double min_x = outline[0].x, max_x = min_x;
+  double min_y = outline[0].y, max_y = min_y;
+  for (const pacer::Point &p : outline) {
+    min_x = std::min(min_x, p.x);
+    max_x = std::max(max_x, p.x);
+    min_y = std::min(min_y, p.y);
+    max_y = std::max(max_y, p.y);
+  }
+  constexpr double kMarginPx = 3.0;
+  // Degenerate outlines (a single-gate or straight-line "track") would blow
+  // the scale up; a floor of one meter keeps them a harmless smudge.
+  double span_x = std::max(max_x - min_x, 1.0);
+  double span_y = std::max(max_y - min_y, 1.0);
+  double scale = std::min((kThumbW - 2 * kMarginPx) / span_x,
+                          (kThumbH - 2 * kMarginPx) / span_y);
+  double cx = (min_x + max_x) / 2, cy = (min_y + max_y) / 2;
+  px->resize(outline.size());
+  for (size_t i = 0; i < outline.size(); ++i) {
+    (*px)[i].x = (lv_value_precise_t)(kThumbW / 2.0 + (outline[i].x - cx) * scale);
+    (*px)[i].y = (lv_value_precise_t)(kThumbH / 2.0 - (outline[i].y - cy) * scale);
+  }
+  return true;
+}
+
+// One picker tile: thumbnail on top, name under it. `index` is what the pick
+// reports back, so the "Nearest (auto)" tile passes kTrackPickAuto and gets a
+// symbol where the outline would go. A track whose file wouldn't parse has no
+// thumb_px and simply shows an empty frame.
+void MakeTrackTile(intptr_t index, const std::string &text, bool active,
+                   const std::vector<lv_point_precise_t> *thumb_px) {
+  lv_obj_t *tile = lv_button_create(s_track_list);
+  lv_obj_set_size(tile, kTileW, kTileH);
+  lv_obj_set_style_pad_all(tile, 4, 0);
+  lv_obj_set_style_pad_row(tile, 2, 0);
+  lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(tile, OnTrackPick, LV_EVENT_CLICKED, (void *)index);
+  if (active) {
+    lv_obj_set_style_border_color(tile, lv_color_hex(0x30E050), 0);
+    lv_obj_set_style_border_width(tile, 2, 0);
+  }
+
+  if (index == kTrackPickAuto) {
+    // Same box as a thumbnail so the names line up across the row.
+    lv_obj_t *box = lv_obj_create(tile);
+    lv_obj_set_size(box, kThumbW, kThumbH);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *sym = lv_label_create(box);
+    lv_obj_set_style_text_font(sym, &lv_font_montserrat_32, 0);
+    lv_label_set_text(sym, LV_SYMBOL_GPS);
+    lv_obj_center(sym);
+  } else {
+    lv_obj_t *line = lv_line_create(tile);
+    lv_obj_set_size(line, kThumbW, kThumbH);
+    lv_obj_set_style_line_color(
+        line, active ? lv_color_hex(0x30E050) : lv_color_hex(0xD0D0D0), 0);
+    lv_obj_set_style_line_width(line, 2, 0);
+    lv_obj_set_style_line_rounded(line, true, 0);
+    if (thumb_px && !thumb_px->empty()) {
+      lv_line_set_points(line, thumb_px->data(), thumb_px->size());
+    }
+  }
+
+  lv_obj_t *label = lv_label_create(tile);
+  lv_obj_set_width(label, lv_pct(100));
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  // Long names get an ellipsis instead of overflowing the tile.
+  lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
+  lv_label_set_text(label, text.c_str());
+}
+
+// Rebuilds the picker's tiles from s_tracks. Caller holds the LVGL lock.
+void RefreshTrackList(const std::string &active_path) {
+  // Deletes the lines before their point buffers go away below.
+  lv_obj_clean(s_track_list);
+  s_track_thumb_px.clear();
+  s_track_thumb_px.resize(s_tracks.size());
+
+  MakeTrackTile(kTrackPickAuto, "Nearest (auto)", false, nullptr);
+  for (size_t i = 0; i < s_tracks.size(); ++i) {
+    // The green outline and border say which one is loaded; a tick would
+    // only eat the name's width.
+    bool active = !active_path.empty() && s_tracks[i].path == active_path;
+    bool have_thumb = FitThumbnail(s_tracks[i].outline, &s_track_thumb_px[i]);
+    MakeTrackTile((intptr_t)i, TrackDisplayName(s_tracks[i].path), active,
+                  have_thumb ? &s_track_thumb_px[i] : nullptr);
+  }
+  if (s_tracks.empty()) {
+    lv_obj_t *empty = lv_label_create(s_track_list);
+    lv_obj_set_style_text_font(empty, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(empty, lv_color_hex(0x808080), 0);
+    lv_label_set_text(empty, "no tracks on card");
+  }
+}
+
+// Full-screen page, unlike the other debug pages: the tiles want the room,
+// and picking one is the whole point of opening it. Header (title + Back) on
+// top, a wrapping grid of tiles under it.
+void BuildTrackPage(lv_obj_t *scr) {
+  s_track_page = lv_obj_create(scr);
+  lv_obj_set_size(s_track_page, kWidth, kHeight);
+  lv_obj_set_pos(s_track_page, 0, 0);
+  lv_obj_set_style_bg_color(s_track_page, lv_color_hex(0x101010), 0);
+  lv_obj_set_style_border_width(s_track_page, 0, 0);
+  lv_obj_set_style_radius(s_track_page, 0, 0);
+  lv_obj_set_style_pad_all(s_track_page, 8, 0);
+  lv_obj_set_style_pad_row(s_track_page, 6, 0);
+  lv_obj_remove_flag(s_track_page, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_track_page, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_flex_flow(s_track_page, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *header = lv_obj_create(s_track_page);
+  lv_obj_set_width(header, lv_pct(100));
+  lv_obj_set_height(header, LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(header, 0, 0);
+  lv_obj_set_style_pad_all(header, 0, 0);
+  lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *title = lv_label_create(header);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x808080), 0);
+  lv_label_set_text(title, "RELOAD TRACK");
+  // MakeButton stretches to the parent's width, which a header row is not
+  // the place for.
+  lv_obj_set_width(MakeButton(header, "Back", OnTrackBack), 96);
+
+  s_track_list = lv_obj_create(s_track_page);
+  lv_obj_set_width(s_track_list, lv_pct(100));
+  lv_obj_set_flex_grow(s_track_list, 1);
+  lv_obj_set_style_bg_opa(s_track_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(s_track_list, 0, 0);
+  lv_obj_set_style_pad_all(s_track_list, 0, 0);
+  lv_obj_set_style_pad_row(s_track_list, 8, 0);
+  lv_obj_set_style_pad_column(s_track_list, 8, 0);
+  lv_obj_set_flex_flow(s_track_list, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(s_track_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START);
+
+  RefreshTrackList("");
 }
 
 lv_obj_t *MakeMapLine(lv_color_t color, int32_t width) {
@@ -490,6 +736,8 @@ void BuildDebugMenu(lv_obj_t *scr) {
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
   MakeButton(s_menu, "Brightness", OnMenuBrightness);
 #endif
+  s_invert_label = lv_obj_get_child(MakeButton(s_menu, "", OnMenuInvert), 0);
+  RefreshInvertLabel();
   MakeButton(s_menu, "Reload track", OnMenuReload);
   MakeButton(s_menu, "Close", OnMenuClose);
 
@@ -534,6 +782,7 @@ void BuildDebugMenu(lv_obj_t *scr) {
   s_logtoggle_label = lv_obj_get_child(toggle, 0);
   MakeButton(s_logging_page, "Back", OnLoggingBack);
 
+  BuildTrackPage(scr);
   BuildMapPage(scr);
 
   lv_obj_add_event_cb(scr, OnScreenLongPress, LV_EVENT_LONG_PRESSED, nullptr);
@@ -632,9 +881,9 @@ esp_err_t dashboard_ui_start() {
 
   ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
   ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
-#if CONFIG_PACER_LCD_INVERT_COLORS
-  ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
-#endif
+  // Kept in a static so the debug menu can flip it at runtime.
+  s_panel = panel;
+  ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, s_invert_colors));
 #if CONFIG_PACER_LCD_SWAP_XY
   ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, true));
 #endif
@@ -804,8 +1053,30 @@ void dashboard_ui_set_debug(const char *text) {
   lvgl_port_unlock();
 }
 
-bool dashboard_ui_consume_track_reload() {
-  return s_reload_request.exchange(false);
+bool dashboard_ui_consume_track_reload(std::string *path_out) {
+  if (!s_reload_request.load()) {
+    return false;
+  }
+  // The picker writes the path and the flag from the LVGL task, so take the
+  // lock to read the pair back consistently.
+  lvgl_port_lock(0);
+  bool requested = s_reload_request.exchange(false);
+  if (requested && path_out) {
+    *path_out = s_reload_path;
+  }
+  lvgl_port_unlock();
+  return requested;
+}
+
+void dashboard_ui_set_track_list(const std::vector<DashboardTrack> &tracks,
+                                 const std::string &active_path) {
+  if (!s_disp || !s_track_list) {
+    return;
+  }
+  lvgl_port_lock(0);
+  s_tracks = tracks;
+  RefreshTrackList(active_path);
+  lvgl_port_unlock();
 }
 
 bool dashboard_ui_logging_enabled() { return s_logging_enabled; }
