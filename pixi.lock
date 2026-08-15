@@ -173,6 +173,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyobjc-core-12.2.1-py314h6590101_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyobjc-framework-cocoa-12.2.1-py314ha06c032_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pypdf-6.16.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pyserial-3.5-pyhcf101f3_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pysocks-1.7.1-pyha55dd90_7.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pytest-8.4.2-pyhcf101f3_1.conda
@@ -255,16 +256,28 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/56/b3/7c69b37f03260a061883bec0e7b05be7117c1b1c85f5212c72c8c2bc3c8c/munch-4.0.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/39/8d/cec69a0a804711fd89f47fad92cd2a438a1ceaafd9dabaf3b8b403b5cbba/nanobind-2.13.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c4/cb/00451c3cf31790287768bb12c6bec834f5d292eaf3022afc88e14b8afc94/paho_mqtt-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/9a/70/875f4a23bfc4731703a5835487d0d2fb999031bd415e7d17c0ae615c18b7/pathvalidate-3.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c7/da/32c752228ae345f489e3a42499d817b6c3996da7e8a3bc7a04fc806b243b/pillow-12.3.0-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/70/8b/d511486697773a3b2789f248576bee892882ee87b6c2408ffc10a1588bcc/pyclang-0.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/7b/122376b1fd3c62c1ed9dc80c931ace4844b3c55407b6fb2d199377c9736f/pydantic-2.13.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ad/1f/8970b150a4b4365623ae00fc88603491f763c627311ae8031e3111356d6e/pydantic_core-2.46.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/77/c1/6e422f34e569cf8e18df68d1939c81c099d2b61e4f7d9621c8a77560799c/pydantic_settings-2.14.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/46/2a/f9697576603dae937727827505a6126a066affb227034e77e6f9068910da/pyelftools-0.33-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c8/4b/71df806f4d260ddf01f9e431f5a6538a4155db3ec84a131d7e087178c591/pygdbmi-0.11.0.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ad/ce/90da5c60ea6963a4abc8f5725fad27de6f50acbb3a02cd24df9b1cdaeca6/pygnssutils-1.2.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/0c/9e/206e05421e5e6cba4d8e0e71968c4c1d6ae16c1affb93af915f4a2918164/pygpsclient-1.7.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/e2/5b/8301c52ca580d3045b6fb87e81af73185f37da976096d80b034d9a3a3975/pynmeagps-1.1.7-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/bd/c038d7cc38edc1aa5bf91ab8068b63d4308c66c4c8bb3cbba7dfbc049f9c/pyparsing-3.3.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/aa/66/bb184d8752df754e7ab0eb02c93b409792516319d9101a1f87d8fde8dad8/pyqgc-1.0.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/07/87/aff12fa74cde78c4eb1a622fdb0f7f059c7f6861711b23bb26adc7c0b1c9/pyrtcm-1.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/31/cf/09f60712a6af633a90c01be7144243fcb715443f3e5e5fff95614c076ce1/pysbf2-1.0.4-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/5b/bd/1863fb7445333b6631083a3d94056433787f021cc57ed2031694fe897d6d/pyspartn-1.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/8f/a7/b470f672e6fc5fee0a01d9e75005a0e617e162381974213a945fcd274843/pytokens-0.4.1-cp314-cp314-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/de/22/2f5861e69a45e10ee2dc6a9aaaf57f30258df12bb14e216a113f6aa9145b/pyubx2-1.3.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/13/dc/819951f5eacb450591705b6d2dfd10177cd47e3d791ddaf78fb2620e9faf/pyubxutils-1.0.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/a0/c3/c56723ad4e9beb09be40b3696dddb61287fbdc00e074b5eb273e330afdec/pyunigps-1.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e1/d5/de8f089119205a09da657ed4784c584ede8381a0ce6821212a6d4ca47054/requests_file-3.0.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl
@@ -3404,6 +3417,14 @@ packages:
   - pkg:pypi/packaging?source=hash-mapping
   size: 91574
   timestamp: 1777103621679
+- kind: pypi
+  name: paho-mqtt
+  version: 2.1.0
+  url: https://files.pythonhosted.org/packages/c4/cb/00451c3cf31790287768bb12c6bec834f5d292eaf3022afc88e14b8afc94/paho_mqtt-2.1.0-py3-none-any.whl
+  sha256: 6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee
+  requires_dist:
+  - pysocks ; extra == 'proxy'
+  requires_python: '>=3.7'
 - kind: conda
   name: pandas
   version: 2.3.3
@@ -3566,6 +3587,38 @@ packages:
   - pkg:pypi/pexpect?source=hash-mapping
   size: 53561
   timestamp: 1733302019362
+- kind: pypi
+  name: pillow
+  version: 12.3.0
+  url: https://files.pythonhosted.org/packages/c7/da/32c752228ae345f489e3a42499d817b6c3996da7e8a3bc7a04fc806b243b/pillow-12.3.0-cp314-cp314-macosx_11_0_arm64.whl
+  sha256: e158cb00350dc278f3b91551101aa7d12415a66ebf2c91d8d5ac14e56ddd3ad0
+  requires_dist:
+  - furo ; extra == 'docs'
+  - olefile ; extra == 'docs'
+  - sphinx>=8.2 ; extra == 'docs'
+  - sphinx-autobuild ; extra == 'docs'
+  - sphinx-copybutton ; extra == 'docs'
+  - sphinx-inline-tabs ; extra == 'docs'
+  - sphinxext-opengraph ; extra == 'docs'
+  - olefile ; extra == 'fpx'
+  - olefile ; extra == 'mic'
+  - arro3-compute ; extra == 'test-arrow'
+  - arro3-core ; extra == 'test-arrow'
+  - nanoarrow ; extra == 'test-arrow'
+  - pyarrow ; extra == 'test-arrow'
+  - coverage>=7.4.2 ; extra == 'tests'
+  - defusedxml ; extra == 'tests'
+  - markdown2 ; extra == 'tests'
+  - olefile ; extra == 'tests'
+  - packaging ; extra == 'tests'
+  - pytest ; extra == 'tests'
+  - pytest-cov ; extra == 'tests'
+  - pytest-timeout ; extra == 'tests'
+  - pytest-xdist ; extra == 'tests'
+  - setuptools ; extra == 'tests'
+  - trove-classifiers>=2024.10.12 ; extra == 'tests'
+  - defusedxml ; extra == 'xmp'
+  requires_python: '>=3.10'
 - kind: conda
   name: platformdirs
   version: 4.11.0
@@ -3900,6 +3953,42 @@ packages:
   - pkg:pypi/pygments?source=hash-mapping
   size: 893031
   timestamp: 1774796815820
+- kind: pypi
+  name: pygnssutils
+  version: 1.2.6
+  url: https://files.pythonhosted.org/packages/ad/ce/90da5c60ea6963a4abc8f5725fad27de6f50acbb3a02cd24df9b1cdaeca6/pygnssutils-1.2.6-py3-none-any.whl
+  sha256: ded88c6f092ada22abee0ae912c4bb054107936e11c90f03e8faa8e312625bf8
+  requires_dist:
+  - certifi>=2025.0.0
+  - paho-mqtt>=2.1.0
+  - pyserial>=3.5
+  - pyspartn>=1.0.8
+  - pyubx2>=1.3.6
+  - pynmeagps>=1.1.5
+  - pysbf2>=1.0.4
+  - pyubxutils>=1.0.6
+  - pyqgc>=1.0.0
+  - pyunigps>=1.0.0
+  requires_python: '>=3.10'
+- kind: pypi
+  name: pygpsclient
+  version: 1.7.2
+  url: https://files.pythonhosted.org/packages/0c/9e/206e05421e5e6cba4d8e0e71968c4c1d6ae16c1affb93af915f4a2918164/pygpsclient-1.7.2-py3-none-any.whl
+  sha256: 163df1ecc74e707f0ef42ebfc3b99f263e88b1b81a5ab81aae7833bdd2d7eac9
+  requires_dist:
+  - requests>=2.34.0
+  - pillow>=12.0.0
+  - pygnssutils>=1.2.6
+  - pyunigps>=1.0.0
+  - pynmeagps>=1.1.5
+  - pyubx2>=1.3.5
+  requires_python: '>=3.10'
+- kind: pypi
+  name: pynmeagps
+  version: 1.1.7
+  url: https://files.pythonhosted.org/packages/e2/5b/8301c52ca580d3045b6fb87e81af73185f37da976096d80b034d9a3a3975/pynmeagps-1.1.7-py3-none-any.whl
+  sha256: 632bd75b05def5ad2d5ed02ad239ce7cfd11a115dc51f95e35461072bf557d3d
+  requires_python: '>=3.10'
 - kind: conda
   name: pyobjc-core
   version: 12.2.1
@@ -3950,6 +4039,50 @@ packages:
   - jinja2 ; extra == 'diagrams'
   requires_python: '>=3.9'
 - kind: conda
+  name: pypdf
+  version: 6.16.1
+  build: pyhcf101f3_0
+  subdir: noarch
+  noarch: python
+  url: https://conda.anaconda.org/conda-forge/noarch/pypdf-6.16.1-pyhcf101f3_0.conda
+  sha256: ffd2227ae0468a9d7248af8990b05aeb1785066de09d0ce4b159af1f4c96aac6
+  md5: e0f7e506919303737ad2aae104c8c0ac
+  depends:
+  - python >=3.10
+  - typing_extensions >=4.0
+  - python
+  license: BSD-3-Clause
+  purls:
+  - pkg:pypi/pypdf?source=hash-mapping
+  size: 315756
+  timestamp: 1786711650153
+- kind: pypi
+  name: pyqgc
+  version: 1.0.0
+  url: https://files.pythonhosted.org/packages/aa/66/bb184d8752df754e7ab0eb02c93b409792516319d9101a1f87d8fde8dad8/pyqgc-1.0.0-py3-none-any.whl
+  sha256: d26d0cabc99cb64ecca1e1ac184c62f23a2edb352b8693606d0b11087c671af8
+  requires_dist:
+  - pynmeagps>=1.1.4
+  - pyrtcm>=1.1.12
+  requires_python: '>=3.10'
+- kind: pypi
+  name: pyrtcm
+  version: 1.2.0
+  url: https://files.pythonhosted.org/packages/07/87/aff12fa74cde78c4eb1a622fdb0f7f059c7f6861711b23bb26adc7c0b1c9/pyrtcm-1.2.0-py3-none-any.whl
+  sha256: a76514d4c3189b9a1b3c77fed8bad73f69e76f1797b3536fdf42b8dee6bff7d1
+  requires_dist:
+  - pynmeagps>=1.1.4
+  requires_python: '>=3.10'
+- kind: pypi
+  name: pysbf2
+  version: 1.0.4
+  url: https://files.pythonhosted.org/packages/31/cf/09f60712a6af633a90c01be7144243fcb715443f3e5e5fff95614c076ce1/pysbf2-1.0.4-py3-none-any.whl
+  sha256: 9efe1d69bbc3002f4e63d9856681570de23e50c92527f96bc604cde75ffc4212
+  requires_dist:
+  - pynmeagps>=1.1.2
+  - pyrtcm>=1.1.10
+  requires_python: '>=3.10'
+- kind: conda
   name: pyserial
   version: '3.5'
   build: pyhcf101f3_2
@@ -3987,6 +4120,12 @@ packages:
   - pkg:pypi/pysocks?source=hash-mapping
   size: 21085
   timestamp: 1733217331982
+- kind: pypi
+  name: pyspartn
+  version: 1.1.0
+  url: https://files.pythonhosted.org/packages/5b/bd/1863fb7445333b6631083a3d94056433787f021cc57ed2031694fe897d6d/pyspartn-1.1.0-py3-none-any.whl
+  sha256: a9a0a2577c7f7bd835a5ad5837891da349edde8f3e4db0df4a577df3fcdcce5d
+  requires_python: '>=3.10'
 - kind: conda
   name: pytest
   version: 8.4.2
@@ -4260,6 +4399,33 @@ packages:
   - pkg:pypi/pytz?source=compressed-mapping
   size: 201126
   timestamp: 1785077087428
+- kind: pypi
+  name: pyubx2
+  version: 1.3.6
+  url: https://files.pythonhosted.org/packages/de/22/2f5861e69a45e10ee2dc6a9aaaf57f30258df12bb14e216a113f6aa9145b/pyubx2-1.3.6-py3-none-any.whl
+  sha256: ae6d1e54a0ab41f705f6fe1aa8efa25802ffbf1c0ae0a23c653145d0783a68d9
+  requires_dist:
+  - pynmeagps>=1.1.5
+  - pyrtcm>=1.2.0
+  requires_python: '>=3.10'
+- kind: pypi
+  name: pyubxutils
+  version: 1.0.6
+  url: https://files.pythonhosted.org/packages/13/dc/819951f5eacb450591705b6d2dfd10177cd47e3d791ddaf78fb2620e9faf/pyubxutils-1.0.6-py3-none-any.whl
+  sha256: 71e44929cd0b8bd1e6ff01b94566d8b114d70f79cb5cf8540baca2fbbf085b92
+  requires_dist:
+  - pyserial>=3.5
+  - pyubx2>=1.2.58
+  requires_python: '>=3.10'
+- kind: pypi
+  name: pyunigps
+  version: 1.0.0
+  url: https://files.pythonhosted.org/packages/a0/c3/c56723ad4e9beb09be40b3696dddb61287fbdc00e074b5eb273e330afdec/pyunigps-1.0.0-py3-none-any.whl
+  sha256: 98e3c5251ef318558528ef36f1de2ff7b6d13365408347fde7d9d813da7f8eb4
+  requires_dist:
+  - pynmeagps>=1.1.2
+  - pyrtcm>=1.1.11
+  requires_python: '>=3.10'
 - kind: conda
   name: pyyaml
   version: 6.0.3
