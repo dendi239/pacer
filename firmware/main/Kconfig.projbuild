@@ -12,11 +12,22 @@ menu "Pacer Dashboard"
             default 17
         config PACER_GPS_BAUD
             int "Baud rate"
-            default 115200
+            default 460800
             help
                 The receiver is switched to this baud at boot (from its
-                9600 default if needed). 25 Hz NAV-PVT needs ~25 kbit/s,
-                so keep this at 115200 or above.
+                9600 default if needed).
+
+                NAV-PVT is the only message enabled, at 100 bytes on the
+                wire per epoch, so 25 Hz needs 25 kbit/s. 115200 clears that
+                with 4.6x to spare and is the floor; the default is higher
+                because the margin is free and buys two things. A frame
+                takes 2.2 ms to shift instead of 8.7 ms out of the 40 ms
+                epoch, and there is room to turn on a second message —
+                NAV-SAT, to see which satellites are actually tracked, is
+                another ~140 bytes an epoch — without revisiting this.
+
+                Drop back to 115200 if the link to the module is long or
+                unshielded enough to make signal integrity the concern.
         config PACER_GPS_LOG_MAX_HACC_M
             int "Worst horizontal accuracy worth logging (metres)"
             default 10
@@ -25,6 +36,76 @@ menu "Pacer Dashboard"
                 of the .dat log; 0 logs every sample the receiver flags as
                 valid. A 2D/3D fix with the gnssFixOK bit set is required
                 either way.
+
+        config PACER_GPS_SBAS
+            bool "Use SBAS corrections (EGNOS, WAAS)"
+            default y
+            help
+                SBAS broadcasts ionospheric and satellite ephemeris/clock
+                corrections for the GPS L1 signals already in use. Those
+                errors drift too slowly to show up as a rough trace: they
+                hold steady across a whole lap and displace that lap
+                sideways instead, which is what leaves consecutive laps
+                metres apart on the map.
+
+                It costs one geostationary channel rather than a whole
+                constellation, so it has a better chance of surviving at
+                25 Hz than GLONASS or Galileo did. If the logged fix
+                interval stops being a steady 40 ms with this on, turn it
+                back off — the rate matters more than the correction.
+
+        choice PACER_GPS_DYNMODEL_CHOICE
+            prompt "Dynamic platform model"
+            default PACER_GPS_DYNMODEL_AUTOMOTIVE
+            help
+                How the receiver's navigation filter models the vehicle it is
+                strapped to. The receiver default ("portable") assumes gentler
+                acceleration than a kart produces, which makes the filter lag
+                the real trajectory through corners — the trace drifts off the
+                racing line and rounds off apexes.
+
+                Automotive is the safe choice. If the logged line still cuts
+                apexes, try airborne <2g: it drops the ground-vehicle
+                assumptions altogether, trading a little stationary stability
+                for a filter that never fights hard cornering.
+
+            config PACER_GPS_DYNMODEL_AUTOMOTIVE
+                bool "Automotive"
+            config PACER_GPS_DYNMODEL_AIR1G
+                bool "Airborne <1g"
+            config PACER_GPS_DYNMODEL_AIR2G
+                bool "Airborne <2g"
+            config PACER_GPS_DYNMODEL_PORTABLE
+                bool "Portable (receiver default)"
+        endchoice
+
+        config PACER_GPS_DYNMODEL
+            int
+            default 4 if PACER_GPS_DYNMODEL_AUTOMOTIVE
+            default 6 if PACER_GPS_DYNMODEL_AIR1G
+            default 7 if PACER_GPS_DYNMODEL_AIR2G
+            default 0 if PACER_GPS_DYNMODEL_PORTABLE
+
+        config PACER_GPS_MIN_ELEV_DEG
+            int "Satellite elevation mask (degrees)"
+            default 10
+            range 0 30
+            help
+                Satellites lower than this above the horizon are left out of
+                the solution. Their signal crosses more atmosphere and is the
+                most likely to arrive via a grandstand or a tree rather than
+                directly, which shows up as position wander. The receiver
+                default is 5; 10 trades a satellite or two for cleaner ones.
+
+        config PACER_GPS_PACC_MASK_M
+            int "Position accuracy mask (metres)"
+            default 25
+            range 0 1000
+            help
+                Fixes whose own accuracy estimate is worse than this get the
+                gnssFixOK bit cleared, which keeps them out of the .dat log.
+                The receiver default is 100 m — far looser than anything
+                useful for lap timing.
     endmenu
 
     menu "Display (NV3041A, QSPI)"
@@ -116,12 +197,5 @@ menu "Pacer Dashboard"
             int "CS GPIO"
             default 10
     endmenu
-
-    config PACER_SESSION_MINUTES
-        int "Default session length (minutes)"
-        default 15
-        help
-            Used when the SD card has no /sdcard/pacer/config.json with a
-            "session_minutes" entry.
 
 endmenu

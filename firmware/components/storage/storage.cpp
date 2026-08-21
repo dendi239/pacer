@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <dirent.h>
-#include <fstream>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -13,8 +12,6 @@
 #include "esp_vfs_fat.h"
 #include "sdkconfig.h"
 #include "sdmmc_cmd.h"
-
-#include <nlohmann/json.hpp>
 
 #include <pacer/geometry/geometry.hpp>
 #include <pacer/reference-track/reference-track.hpp>
@@ -71,25 +68,6 @@ esp_err_t storage_mount() {
   mkdir("/sdcard/tracks", 0775);
   ESP_LOGI(TAG, "sd card mounted");
   return ESP_OK;
-}
-
-double storage_session_minutes(double fallback_minutes) {
-  std::ifstream file("/sdcard/pacer/config.json");
-  if (!file.is_open()) {
-    return fallback_minutes;
-  }
-  try {
-    nlohmann::json json;
-    file >> json;
-    for (const char *key : {"session_minutes", "minutes"}) {
-      if (json.contains(key) && json[key].is_number()) {
-        return json[key].get<double>();
-      }
-    }
-  } catch (const std::exception &e) {
-    ESP_LOGW(TAG, "config.json: %s", e.what());
-  }
-  return fallback_minutes;
 }
 
 esp_err_t storage_log_open(std::string *path_out) {

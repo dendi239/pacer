@@ -9,3 +9,31 @@ add_test(
 )
 
 set_property(TARGET test_coordinate_system PROPERTY FOLDER "tests")
+
+add_executable(test_live_timing test_live_timing.cpp)
+target_link_libraries(test_live_timing PRIVATE
+    pacer::datatypes
+    pacer::geometry
+    pacer::gps-source
+    pacer::laps
+    pacer::live-timing
+    pacer::reference-track
+    Catch2::Catch2WithMain)
+
+add_test(
+    NAME test_live_timing
+    COMMAND test_live_timing
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+set_property(TARGET test_live_timing PROPERTY FOLDER "tests")
+
+# Diagnostic: replays a firmware .dat log through LiveTiming and prints where
+# the delta stalls. Not a test — run it by hand against a session log.
+add_executable(replay_dat replay_dat.cpp)
+target_link_libraries(replay_dat PRIVATE
+    pacer::gps-source
+    pacer::live-timing
+    pacer::reference-track)
+
+set_property(TARGET replay_dat PROPERTY FOLDER "tests")

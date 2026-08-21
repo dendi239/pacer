@@ -3,7 +3,7 @@
 // The driver-facing screen: NV3041A QSPI panel + GT911 touch + LVGL.
 // Layout (480x272 landscape):
 //
-//   LAP 7                       12:34   <- lap number / session countdown
+//   LAP 7                        8:12   <- lap number / session elapsed
 //              -0.42                    <- delta to session best, huge,
 //              48.7                        green negative / red positive
 //   LAST 48.912       BEST 48.299      <- completed lap times
@@ -90,6 +90,38 @@ bool dashboard_ui_track_map_visible();
 /// map re-fits so track, position and a margin stay on screen. Cheap no-op
 /// while the page is closed.
 void dashboard_ui_set_track_map_position(double x_m, double y_m);
+
+/// Live receiver state for the debug menu's "GPS" page. The page pairs this
+/// with the static configuration the firmware pushed at boot, so the two can
+/// be read against each other: `corrections` and `interval_ms` are what say
+/// whether SBAS actually locked and whether the requested rate survived it.
+struct DashboardGpsState {
+  /// uGnssDecUbxNavPvt_t::fixType (0 none, 2 2D, 3 3D, 4 GNSS+DR).
+  int fix_type = 0;
+  /// The receiver's own gnssFixOK bit — a fixType can read 3D while the
+  /// solution is still outside the configured masks.
+  bool fix_ok = false;
+  int num_sv = 0;
+  double h_acc_m = 0;
+  /// pDOP in its natural units, i.e. the PVT field already divided by 100.
+  double pdop = 0;
+  /// diffSoln: differential (SBAS/RTCM) corrections were applied.
+  bool diff_soln = false;
+  /// carrSoln: 0 none, 1 RTK float, 2 RTK fixed.
+  int carr_soln = 0;
+  /// Measured spacing between fixes; 0 until two have arrived. Compare
+  /// against the configured rate — a receiver that cannot hold the rate it
+  /// was asked for reports the shortfall here and nowhere else.
+  double interval_ms = 0;
+};
+
+/// Cheap no-op while the GPS page is closed.
+void dashboard_ui_set_gps_state(const DashboardGpsState &state);
+
+/// The boot-time configuration block on the GPS page, shown in grey under
+/// the live figures — pass ubx_gps_config_summary(). Static text, so call it
+/// once at startup; the UI keeps no dependency on the GPS component itself.
+void dashboard_ui_set_gps_config(const char *text);
 
 /// Current state of the debug menu's logging toggle (defaults to on).
 bool dashboard_ui_logging_enabled();

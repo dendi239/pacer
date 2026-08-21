@@ -1,0 +1,68 @@
+{
+    "version": 1,
+    "tracks": [
+        {
+            "name": "Buckmore Park",
+            "location": {
+                "lat": 51.343,
+                "lon": 0.502,
+                "altitude": 0.0
+            },
+            "radius": 10000
+        },
+        {
+            "name": "Daytona Sandown Park",
+            "location": {
+                "lat": 51.375755,
+                "lon": 0.361993,
+                "altitude": 0.0
+            },
+            "radius": 10000
+        },
+        {
+            "name": "Daytona Milton Keynes",
+            "location": {
+                "lat": 52.040988,
+                "lon": 0.784958,
+                "altitude": 0.0
+            },
+            "radius": 10000
+        },
+        {
+            "name": "Whilton Mill",
+            "location": {
+                "lat": 52.276616,
+                "lon": 1.088216,
+                "altitude": 95.225930
+            },
+            "radius": 10000
+        },
+        {
+            "name": "Clay Pigeon",
+            "location": {
+                "lat": 50.823994,
+                "lon": 2.555045,
+                "altitude": 240.943227
+            },
+            "radius": 10000
+        },
+        {
+            "name": "Rye House",
+            "location": {
+                "lat": 51.767428,
+                "lon": 0.011796,
+                "altitude": 26.470608
+            },
+            "radius": 10000
+        },
+        {
+            "name": "Pro Kart Raceland",
+            "location": {
+                "lat": 49.326336,
+                "lon": 12.214084,
+                "altitude": 393.565381
+            },
+            "radius": 10000
+        }
+    ]
+}

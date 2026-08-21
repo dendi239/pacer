@@ -689,12 +689,12 @@ void pacer::DeltaLapsComparision::PlotComparisonMap(const Laps &laps) {
 
       const Lap *best =
           best_lap_id_ != -1 ? &resampled_laps_[best_lap_id_] : nullptr;
-      // Resample() emits the crossing of gate k at point index k + 1.
-      if (best && k + 2 < best->cum_distances.size()) {
-        SetHoverDistance(best->cum_distances[k + 1] * (1 - t) +
-                         best->cum_distances[k + 2] * t);
-      } else if (best && k + 1 < best->cum_distances.size()) {
-        SetHoverDistance(best->cum_distances[k + 1]);
+      // Resample() emits the crossing of gate k at point index k.
+      if (best && k + 1 < best->cum_distances.size()) {
+        SetHoverDistance(best->cum_distances[k] * (1 - t) +
+                         best->cum_distances[k + 1] * t);
+      } else if (best && k < best->cum_distances.size()) {
+        SetHoverDistance(best->cum_distances[k]);
       } else {
         double d = 0;
         auto mid = [](const Segment &g) { return (g.first + g.second) / 2.0; };

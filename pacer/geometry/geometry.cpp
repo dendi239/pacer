@@ -1,5 +1,6 @@
 #include "geometry.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
@@ -46,6 +47,13 @@ pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to,
       .altitude = from.altitude * (1 - ratio) + to.altitude * ratio,
       .full_speed = from.full_speed * (1 - ratio) + to.full_speed * ratio,
       .ground_speed = from.ground_speed * (1 - ratio) + to.ground_speed * ratio,
+      .vel_n = from.vel_n * (1 - ratio) + to.vel_n * ratio,
+      .vel_e = from.vel_e * (1 - ratio) + to.vel_e * ratio,
+      .vel_d = from.vel_d * (1 - ratio) + to.vel_d * ratio,
+      // Accuracy blends toward the worse of the two: an interpolated point
+      // is no better known than the endpoint it is least sure of.
+      .h_acc = std::max(from.h_acc, to.h_acc),
+      .s_acc = std::max(from.s_acc, to.s_acc),
       .timestamp_ms = from.timestamp_ms +
                       static_cast<int64_t>(std::llround(
                           (to.timestamp_ms - from.timestamp_ms) * ratio)),

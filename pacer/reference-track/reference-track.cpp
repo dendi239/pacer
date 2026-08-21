@@ -39,6 +39,11 @@ pacer::Segment ExtendSegment(const pacer::Segment &s, double meters) {
 // Without this, a delta calculated against widely-spaced hand-drawn gates
 // (e.g. down a straight) is jittery: two laps only get compared where a
 // gate actually is, so long gaps between gates show up as noise.
+//
+// The pair from the last annotated gate back round to the first is included:
+// a track is a loop, and leaving that stretch bare left the last tens of
+// meters of every lap — the run down to the line, on most circuits — with no
+// gates at all, so the live delta had nothing to update against there.
 std::vector<pacer::Segment>
 DensifyGates(const std::vector<pacer::Segment> &gates) {
   if (gates.size() < 2) {
@@ -56,16 +61,20 @@ DensifyGates(const std::vector<pacer::Segment> &gates) {
   // Counting first costs one cheap pass and saves the growth overshoot: a
   // 1.1 km circuit densifies to ~1100 segments, and letting the vector
   // double its way there wastes ~30 KB of heap the ESP32 doesn't have.
-  size_t total = 1;
-  for (size_t i = 0; i + 1 < gates.size(); ++i) {
-    total += steps_between(gates[i], gates[i + 1]);
+  size_t n = gates.size();
+  size_t total = 0;
+  for (size_t i = 0; i < n; ++i) {
+    total += steps_between(gates[i], gates[(i + 1) % n]);
   }
 
+  // Each pair contributes its own gate plus the synthetic ones up to (but not
+  // including) the next annotated gate, so gates[0] — the start/finish line —
+  // stays index 0 and appears exactly once.
   std::vector<pacer::Segment> dense;
   dense.reserve(total);
-  for (size_t i = 0; i + 1 < gates.size(); ++i) {
+  for (size_t i = 0; i < n; ++i) {
     const pacer::Segment &g1 = gates[i];
-    const pacer::Segment &g2 = gates[i + 1];
+    const pacer::Segment &g2 = gates[(i + 1) % n];
     size_t steps = steps_between(g1, g2);
 
     for (size_t k = 0; k < steps; ++k) {
@@ -76,9 +85,20 @@ DensifyGates(const std::vector<pacer::Segment> &gates) {
       });
     }
   }
-  dense.push_back(gates.back());
   return dense;
 }
+
+// How many gates ahead of the next expected one a single sample interval may
+// reach, and equivalently the widest run of gates Resample() will bridge.
+//
+// Two things eat into this. A kart covers a couple of meters between fixes,
+// so one interval crosses a handful of the ~1 m gates. And densifying by
+// interpolating endpoints makes consecutive gates converge on the inside of
+// a bend — tightly enough that they cross over each other, so a lap on the
+// inside line meets them out of index order and leaves a run of them
+// untouched. Measured over a Daytona Milton Keynes session, those runs reach
+// 23 gates at the tighter corners, and nothing improves past a window of 24.
+constexpr size_t kGateWindow = 32;
 
 } // namespace
 
@@ -111,27 +131,86 @@ pacer::Lap pacer::ReferenceTrack::Resample(const Lap &lap) const {
   }
 
   std::vector<Segment> dense_gates = DensifiedGates();
+  if (dense_gates.empty()) {
+    return lap;
+  }
 
-  Lap result{.points = {lap.points.front()}};
+  // Convert once up front: Global() is trigonometry, and the scan below looks
+  // at each gate from several different sample intervals.
+  std::vector<Segment> gates;
+  gates.reserve(dense_gates.size());
+  for (const Segment &gate : dense_gates) {
+    gates.push_back(ToGlobalSegment(gate, cs));
+  }
 
-  for (size_t i_gate = 0, i_lap = 1; i_gate < dense_gates.size(); ++i_gate) {
-    if (i_lap >= lap.points.size()) {
-      break;
-    }
-    Segment timing_line = ToGlobalSegment(dense_gates[i_gate], cs);
+  // One point per gate, so two laps resampled against the same track line up
+  // index for index — which is the whole premise of comparing them.
+  std::vector<GPSSample> crossings(gates.size());
+  std::vector<bool> crossed(gates.size(), false);
 
-    while (i_lap < lap.points.size()) {
-      auto split_point =
-          pacer::Split(timing_line, lap.points[i_lap - 1], lap.points[i_lap]);
-      if (split_point) {
-        result.points.push_back(*split_point);
+  // Gate 0 is the start/finish line, and Laps::GetLap() begins every lap
+  // exactly on it. A point lying on a line does not count as crossing it, so
+  // gate 0 never matches by intersection; take it from the lap itself. Left
+  // to the scan, it would consume the entire lap looking for a crossing that
+  // cannot happen, and every later gate would come up empty.
+  crossings[0] = lap.points.front();
+  crossed[0] = true;
+
+  size_t next_gate = 1;
+  for (size_t i = 1; i < lap.points.size() && next_gate < gates.size(); ++i) {
+    // Gates sit about a meter apart, so one interval can cross several of
+    // them; keep taking crossings until none of the upcoming ones intersects
+    // it. Searching a bounded window rather than the rest of the lap is what
+    // keeps a run of gates the racing line stepped over from stopping the
+    // scan dead for the remainder of the lap.
+    for (bool found = true; found && next_gate < gates.size();) {
+      found = false;
+      size_t window = std::min(kGateWindow, gates.size() - next_gate);
+      for (size_t k = 0; k < window; ++k) {
+        size_t gate = next_gate + k;
+        auto split_point =
+            pacer::Split(gates[gate], lap.points[i - 1], lap.points[i]);
+        if (!split_point) {
+          continue;
+        }
+        crossings[gate] = *split_point;
+        crossed[gate] = true;
+        next_gate = gate + 1;
+        found = true;
         break;
       }
-      ++i_lap;
     }
   }
 
-  result.points.push_back(lap.points.back());
+  // Gates the lap stepped over keep their slot, interpolated between the
+  // crossings either side — the same fill the live-timing engine does. Simply
+  // leaving them out would shift every later index by however many this
+  // particular lap happened to miss, and quietly compare two laps at
+  // different parts of the track.
+  for (size_t gate = 1, previous = 0; gate < next_gate; ++gate) {
+    if (!crossed[gate]) {
+      continue;
+    }
+    for (size_t skipped = previous + 1; skipped < gate; ++skipped) {
+      double ratio = static_cast<double>(skipped - previous) /
+                     static_cast<double>(gate - previous);
+      crossings[skipped] =
+          Interpolate(crossings[previous], crossings[gate], ratio);
+    }
+    previous = gate;
+  }
+
+  // Gates past next_gate were never reached — the lap ran out first — so they
+  // have nothing to interpolate from and are dropped.
+  Lap result;
+  result.points.assign(crossings.begin(), crossings.begin() + next_gate);
+  if (next_gate == gates.size()) {
+    // The last gate stops a meter short of the start/finish line; close the
+    // lap off with its own final point so the trace covers the full lap
+    // distance. Skipped when the sequence didn't run to the end, where it
+    // would jump across whatever is missing.
+    result.points.push_back(lap.points.back());
+  }
   result.FillDistances(cs);
   return result;
 }

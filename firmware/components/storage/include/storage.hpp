@@ -2,7 +2,6 @@
 
 // SD card (SPI mode) storage:
 //  - /sdcard/tracks/*.json        track_annotator reference tracks
-//  - /sdcard/pacer/config.json    {"session_minutes": 15}
 //  - /sdcard/pacer/SESS_NNN.dat   raw session log, one int64 timestamp_ms +
 //                                 uGnssDecUbxNavPvt_t per record — the same
 //                                 DatVersion::WITH_TIMESTAMP format the
@@ -16,9 +15,6 @@
 #include <pacer/gps-source/ubx-nav-pvt.hpp>
 
 esp_err_t storage_mount();
-
-/// Session length from config.json, or `fallback_minutes` if absent/invalid.
-double storage_session_minutes(double fallback_minutes);
 
 /// Creates the next free /sdcard/pacer/SESS_NNN.dat for logging.
 esp_err_t storage_log_open(std::string *path_out = nullptr);

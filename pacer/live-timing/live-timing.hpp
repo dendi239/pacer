@@ -20,12 +20,9 @@ namespace pacer {
 // or guard externally (the firmware copies Snapshot() under a mutex).
 
 struct SessionConfig {
-  /// Timed-session length; the countdown starts the first time speed
-  /// exceeds start_speed_mps.
+  /// Timed-session length; the countdown starts when lap 1 does, i.e. at
+  /// the first start-line crossing. The out lap is not on the clock.
   double session_length_s = 15 * 60;
-
-  /// Speed that arms the session clock (rolling out of the pits).
-  double start_speed_mps = 2.0;
 
   /// Gate crossings below this speed are ignored — a parked kart's fix
   /// noise wiggles across nearby gates. Kept just above the receiver's
@@ -41,15 +38,43 @@ struct SessionConfig {
   /// glitchy fix can skip a few gates, and skipped gate times are filled by
   /// interpolation.
   size_t gate_lookahead = 12;
+
+  /// Widest hole the skipped-gate interpolation will fill, in gates (~1 m
+  /// each). Past this the kart wasn't following the gate sequence at all,
+  /// and inventing times across the hole would both fake the delta and let
+  /// a lap that was never fully driven become the reference.
+  size_t max_interpolated_gates = 25;
+
+  /// How far the kart may travel without crossing the gate it is expected
+  /// at before the tracker goes looking for where the kart actually is.
+  /// Gates sit ~1 m apart and the forward search covers gate_lookahead of
+  /// them, so anything past that and the kart is not where the sequence
+  /// says: it has run wide of the annotated edge, taken the pit lane, or
+  /// the receiver dropped a burst of fixes.
+  double resync_distance_m = 15.0;
+
+  /// While lost, how close to a gate the fix must be for that gate to count
+  /// as a re-acquisition. Kart-circuit pit lanes run alongside the start
+  /// straight, tens of meters out; this keeps one from re-anchoring the
+  /// tracker onto the racing line it is parked next to.
+  double resync_max_offset_m = 8.0;
+
+  /// Distance between re-acquisition scans while lost. The scan is over
+  /// every gate, so it is the one non-trivial cost here; pacing it by
+  /// distance keeps a kart parked in the pits from paying it at all.
+  double resync_scan_interval_m = 5.0;
 };
 
 struct LiveSnapshot {
   /// 0 while on the out lap (start line not crossed yet), then 1, 2, ...
   int lap_number = 0;
 
+  /// True once lap 1 has started; the out lap runs off the clock.
   bool session_started = false;
   /// NaN until the session clock is armed; negative once time has expired.
   double session_remaining_s = 0;
+  /// Time since the session clock was armed; NaN until then.
+  double session_elapsed_s = 0;
 
   /// Elapsed time on the current lap; NaN until the first flying lap starts.
   double current_lap_s = 0;
@@ -59,7 +84,19 @@ struct LiveSnapshot {
   /// Current lap time at the last crossed gate minus the session-best lap's
   /// time at that same gate. Only meaningful while delta_valid.
   double delta_s = 0;
+
+  /// False whenever delta_s is not a live reading: before the first
+  /// reference lap, and — this is the one that matters in a race — while
+  /// the tracker has lost the kart (see SessionConfig::resync_distance_m).
+  /// A frozen number on screen is worse than no number, because the driver
+  /// can't tell it has stopped moving.
   bool delta_valid = false;
+
+  /// True while the tracker cannot find the kart on the gate sequence at
+  /// all: in the pit lane, deep in the run-off, or riding out a fix outage.
+  /// A kart that merely ran wide of a gate is re-acquired silently and
+  /// never sets this.
+  bool lost = false;
 
   double speed_mps = 0;
 
@@ -99,7 +136,7 @@ public:
   /// Starts the session over on the track already installed: lap numbering,
   /// lap/session clocks and the delta reference all go back to where
   /// SetReferenceTrack() left them, without re-parsing the track. The next
-  /// start-line crossing begins lap 1 again.
+  /// start-line crossing begins lap 1 and rearms the session clock.
   void ResetSession();
 
   /// Feed one GPS fix; `s.timestamp_ms` must be milliseconds on a monotonic
@@ -120,9 +157,24 @@ public:
   std::optional<TrackOffset> OffsetFromTrack(const GPSSample &s) const;
 
 private:
+  /// Gate/start-line bookkeeping for one sample; OnSample() wraps it with
+  /// the clock updates, which must run even on the samples this skips.
+  void TrackCrossings(const GPSSample &s);
+
   void StartLap(double crossing_time);
   void FinishLap(double crossing_time);
   void RecordGate(size_t gate, double crossing_time);
+
+  /// Full-gate scan for where `s` actually is, called while lost. Resumes
+  /// tracking there if the kart is back on the gate sequence ahead of where
+  /// it was last seen, drops the lap if it has come round past the start
+  /// line without crossing it, and does nothing while still off-track.
+  void TryReacquire(const GPSSample &s);
+
+  /// Gives up on the lap in progress without timing it: the lap clock has
+  /// stopped meaning anything, so the next start-line crossing begins a
+  /// fresh lap. Session clock, lap count and best lap are untouched.
+  void AbandonLap();
 
   SessionConfig cfg_;
 
@@ -136,6 +188,13 @@ private:
   size_t next_gate_ = 0; ///< next expected gate index while on a lap
   double lap_start_time_ = 0;
   size_t last_recorded_gate_ = 0;
+
+  /// Ground distance covered since the last gate was recorded, and since
+  /// the last re-acquisition scan. Integrated from the receiver's speed
+  /// rather than from position deltas, so fix noise doesn't accumulate into
+  /// it while the kart sits still.
+  double distance_since_gate_m_ = 0;
+  double distance_since_scan_m_ = 0;
 
   /// Per-gate times relative to lap start; NaN where not (yet) crossed.
   std::vector<double> current_gate_times_;

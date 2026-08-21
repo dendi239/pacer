@@ -47,6 +47,14 @@ struct ReferenceTrack {
   /// roughly one synthetic gate per meter (linearly interpolated between
   /// each pair) so widely-spaced hand-drawn gates, e.g. down a straight,
   /// don't produce a jittery delta.
+  ///
+  /// Point `k` is the crossing of DensifiedGates()[k]: point 0 is where the
+  /// lap starts on the start/finish line, and gates the lap stepped over —
+  /// off the racing line through a corner, or a burst of dropped fixes —
+  /// still get a point, interpolated between the crossings either side.
+  /// Trailing gates the lap never reached have no point, so a Lap that ran
+  /// short resamples short rather than misaligning. When every gate is
+  /// covered, one extra point closes the lap on its own final sample.
   Lap Resample(const Lap &lap) const;
 
   /// Builds a ReferenceTrack the old way: a perpendicular offset of `width`

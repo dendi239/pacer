@@ -70,6 +70,11 @@ pacer::GPSSample ToSample(const uGnssDecUbxNavPvt_t &pvt) {
       .altitude = pvt.height / 1000.0,
       .full_speed = pvt.gSpeed / 1000.0,
       .ground_speed = pvt.gSpeed / 1000.0,
+      .vel_n = pvt.velN / 1000.0, // mm/s to m/s
+      .vel_e = pvt.velE / 1000.0,
+      .vel_d = pvt.velD / 1000.0,
+      .h_acc = pvt.hAcc / 1000.0, // mm to m
+      .s_acc = pvt.sAcc / 1000.0,
       .timestamp_ms = static_cast<int64_t>(pvt.iTOW),
   };
 }
@@ -136,14 +141,13 @@ extern "C" void app_main(void) {
   dashboard_ui_set_status("mounting sd card...");
 
   bool sd_ok = storage_mount() == ESP_OK;
-  double session_minutes = CONFIG_PACER_SESSION_MINUTES;
   if (sd_ok) {
-    session_minutes = storage_session_minutes(session_minutes);
     storage_log_open();
   }
 
   s_pvt_queue = xQueueCreate(64, sizeof(uGnssDecUbxNavPvt_t));
   ESP_ERROR_CHECK(ubx_gps_start(OnPvt, nullptr));
+  dashboard_ui_set_gps_config(ubx_gps_config_summary());
   dashboard_ui_set_status(sd_ok ? "waiting for gps fix..."
                                 : "NO SD CARD - waiting for gps fix...");
 
@@ -168,8 +172,7 @@ extern "C" void app_main(void) {
   auto load_track = [&](const std::string &path) {
     try {
       auto rt = pacer::ReferenceTrack::FromFile(path);
-      timing.SetReferenceTrack(
-          rt, pacer::SessionConfig{.session_length_s = session_minutes * 60.0});
+      timing.SetReferenceTrack(rt);
       track_loaded = true;
       if (!rt.segments.empty()) {
         pacer::Point median{};
@@ -230,6 +233,12 @@ extern "C" void app_main(void) {
   dashboard_ui_set_track_list(track_list, track_path);
 
   uGnssDecUbxNavPvt_t pvt;
+  // Measured fix spacing for the debug menu's GPS page. iTOW is GPS time of
+  // week in milliseconds, so consecutive deltas are the receiver's actual
+  // solution rate — the one number that says whether it really sustained the
+  // rate the firmware asked for, rather than quietly falling short.
+  uint32_t last_itow = 0;
+  double fix_interval_ms = 0;
   int samples_since_ui = 0;
   int samples_since_debug = 0;
   int samples_until_scan = 1;
@@ -243,9 +252,19 @@ extern "C" void app_main(void) {
       continue;
     }
 
-    // Debug menu action: drop the track and session state, re-read config,
-    // then either load the track the picker named or rescan /sdcard/tracks
-    // for the nearest one on the next samples.
+    // Deltas beyond half a second are a dropped frame, a reconfigured
+    // receiver or the weekly iTOW rollover — none of which is evidence about
+    // the sustained rate, so they are left out of the average entirely.
+    if (last_itow != 0 && pvt.iTOW > last_itow && pvt.iTOW - last_itow <= 500) {
+      double delta = pvt.iTOW - last_itow;
+      fix_interval_ms =
+          fix_interval_ms == 0 ? delta : fix_interval_ms * 0.9 + delta * 0.1;
+    }
+    last_itow = pvt.iTOW;
+
+    // Debug menu action: drop the track and session state, then either load
+    // the track the picker named or rescan /sdcard/tracks for the nearest one
+    // on the next samples.
     std::string picked;
     if (dashboard_ui_consume_track_reload(&picked)) {
       track_loaded = false;
@@ -255,7 +274,6 @@ extern "C" void app_main(void) {
       map_ready = false;
       dashboard_ui_set_track_map({});
       if (sd_ok) {
-        session_minutes = storage_session_minutes(CONFIG_PACER_SESSION_MINUTES);
         rescan_track_list();
       }
       samples_until_scan = 1;
@@ -300,6 +318,18 @@ extern "C" void app_main(void) {
                pvt.hAcc / 1000.0);
       dashboard_ui_set_debug(dbg);
       dashboard_ui_set_log_stats(storage_log_appended(), storage_log_flushed());
+
+      DashboardGpsState gps;
+      gps.fix_type = pvt.fixType;
+      gps.fix_ok = (pvt.flags & U_GNSS_DEC_UBX_NAV_PVT_FLAGS_GNSS_FIX_OK) != 0;
+      gps.num_sv = pvt.numSV;
+      gps.h_acc_m = pvt.hAcc / 1000.0;
+      gps.pdop = pvt.pDOP / 100.0;
+      gps.diff_soln = (pvt.flags & U_GNSS_DEC_UBX_NAV_PVT_FLAGS_DIFF_SOLN) != 0;
+      // carrSoln, bits 7:6 of flags — no named constant for it in the decoder.
+      gps.carr_soln = (pvt.flags >> 6) & 0x03;
+      gps.interval_ms = fix_interval_ms;
+      dashboard_ui_set_gps_state(gps);
     }
 
     if (!HasFix(pvt)) {

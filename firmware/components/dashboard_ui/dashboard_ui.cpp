@@ -16,6 +16,7 @@
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
+#include "pacer_fonts.h"
 #include "sdkconfig.h"
 
 #if CONFIG_PACER_TOUCH_ENABLED
@@ -29,6 +30,10 @@ const char *TAG = "dashboard_ui";
 
 constexpr int kWidth = CONFIG_PACER_LCD_H_RES;
 constexpr int kHeight = CONFIG_PACER_LCD_V_RES;
+
+// Bottom of the LAP/clock row: its 4 px top margin plus the 24 px face's
+// 27 px line height. The debug line hangs off it.
+constexpr int kTopRowH = 31;
 
 // Disabled bool Kconfig options generate no macro at all, so bring them
 // into constexpr land before using them as values.
@@ -69,6 +74,12 @@ lv_obj_t *s_offset_detail_label = nullptr;
 lv_obj_t *s_logging_page = nullptr;
 lv_obj_t *s_logstats_label = nullptr;
 lv_obj_t *s_logtoggle_label = nullptr;
+// GPS page: live receiver state over the static config pushed at boot.
+lv_obj_t *s_gps_page = nullptr;
+lv_obj_t *s_gps_fix_label = nullptr;
+lv_obj_t *s_gps_corr_label = nullptr;
+lv_obj_t *s_gps_detail_label = nullptr;
+lv_obj_t *s_gps_config_label = nullptr;
 lv_obj_t *s_brightness_page = nullptr;
 lv_obj_t *s_brightness_label = nullptr;
 lv_obj_t *s_invert_label = nullptr;
@@ -163,13 +174,14 @@ void FormatLapTime(char *buf, size_t n, double seconds) {
   snprintf(buf, n, "%d:%06.3f", mins, seconds - mins * 60);
 }
 
-void FormatCountdown(char *buf, size_t n, double seconds) {
+// Session clock, m:ss. NaN (the session hasn't been armed yet) reads "--:--".
+void FormatSessionTime(char *buf, size_t n, double seconds) {
   if (std::isnan(seconds)) {
     snprintf(buf, n, "--:--");
     return;
   }
-  int total = (int)std::fabs(seconds);
-  snprintf(buf, n, "%s%d:%02d", seconds < 0 ? "-" : "", total / 60, total % 60);
+  int total = (int)seconds;
+  snprintf(buf, n, "%d:%02d", total / 60, total % 60);
 }
 
 //----------------------------- debug menu ---------------------------------//
@@ -353,6 +365,7 @@ void OnScreenLongPress(lv_event_t *) {
       lv_obj_has_flag(s_nextline_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_offset_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_logging_page, LV_OBJ_FLAG_HIDDEN) &&
+      lv_obj_has_flag(s_gps_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_track_page, LV_OBJ_FLAG_HIDDEN) &&
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
       lv_obj_has_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN) &&
@@ -407,6 +420,24 @@ void OnTrackPick(lv_event_t *e) {
 
 void OnTrackBack(lv_event_t *) {
   ShowTrackPage(false);
+  ShowMenu(true);
+}
+
+void ShowGpsPage(bool show) {
+  if (show) {
+    lv_obj_remove_flag(s_gps_page, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(s_gps_page, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void OnMenuGps(lv_event_t *) {
+  ShowMenu(false);
+  ShowGpsPage(true);
+}
+
+void OnGpsBack(lv_event_t *) {
+  ShowGpsPage(false);
   ShowMenu(true);
 }
 
@@ -491,7 +522,7 @@ lv_obj_t *MakePanel(lv_obj_t *scr, const char *title) {
   lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_t *t = lv_label_create(panel);
-  lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(t, &pacer_font_mono_20, 0);
   lv_obj_set_style_text_color(t, lv_color_hex(0x808080), 0);
   lv_label_set_text(t, title);
   return panel;
@@ -503,7 +534,7 @@ lv_obj_t *MakeButton(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
   lv_obj_set_width(btn, lv_pct(100));
   lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
   lv_obj_t *label = lv_label_create(btn);
-  lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(label, &pacer_font_mono_20, 0);
   lv_label_set_text(label, text);
   lv_obj_center(label);
   return btn;
@@ -583,7 +614,7 @@ void MakeTrackTile(intptr_t index, const std::string &text, bool active,
     lv_obj_set_style_border_width(box, 0, 0);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *sym = lv_label_create(box);
-    lv_obj_set_style_text_font(sym, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(sym, &pacer_font_mono_32, 0);
     lv_label_set_text(sym, LV_SYMBOL_GPS);
     lv_obj_center(sym);
   } else {
@@ -600,7 +631,7 @@ void MakeTrackTile(intptr_t index, const std::string &text, bool active,
 
   lv_obj_t *label = lv_label_create(tile);
   lv_obj_set_width(label, lv_pct(100));
-  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(label, &pacer_font_mono_14, 0);
   lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
   // Long names get an ellipsis instead of overflowing the tile.
   lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
@@ -625,7 +656,7 @@ void RefreshTrackList(const std::string &active_path) {
   }
   if (s_tracks.empty()) {
     lv_obj_t *empty = lv_label_create(s_track_list);
-    lv_obj_set_style_text_font(empty, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(empty, &pacer_font_mono_20, 0);
     lv_obj_set_style_text_color(empty, lv_color_hex(0x808080), 0);
     lv_label_set_text(empty, "no tracks on card");
   }
@@ -659,7 +690,7 @@ void BuildTrackPage(lv_obj_t *scr) {
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
   lv_obj_t *title = lv_label_create(header);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(title, &pacer_font_mono_20, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0x808080), 0);
   lv_label_set_text(title, "RELOAD TRACK");
   // MakeButton stretches to the parent's width, which a header row is not
@@ -708,7 +739,7 @@ void BuildMapPage(lv_obj_t *scr) {
   lv_obj_add_event_cb(s_map_page, OnMapDraw, LV_EVENT_DRAW_MAIN, nullptr);
 
   s_map_empty_label = lv_label_create(s_map_page);
-  lv_obj_set_style_text_font(s_map_empty_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(s_map_empty_label, &pacer_font_mono_24, 0);
   lv_obj_set_style_text_color(s_map_empty_label, lv_color_hex(0x808080), 0);
   lv_label_set_text(s_map_empty_label, "no track");
   lv_obj_center(s_map_empty_label);
@@ -732,6 +763,7 @@ void BuildDebugMenu(lv_obj_t *scr) {
   MakeButton(s_menu, "Next timing line", OnMenuNextLine);
   MakeButton(s_menu, "Track offset", OnMenuOffset);
   MakeButton(s_menu, "Track map", OnMenuTrackMap);
+  MakeButton(s_menu, "GPS", OnMenuGps);
   MakeButton(s_menu, "Logging", OnMenuLogging);
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
   MakeButton(s_menu, "Brightness", OnMenuBrightness);
@@ -743,25 +775,26 @@ void BuildDebugMenu(lv_obj_t *scr) {
 
   s_nextline_page = MakePanel(scr, "NEXT TIMING LINE");
   s_nextline_label = lv_label_create(s_nextline_page);
-  lv_obj_set_style_text_font(s_nextline_label, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(s_nextline_label, &pacer_font_mono_48, 0);
   lv_label_set_text(s_nextline_label, "--");
   MakeButton(s_nextline_page, "Back", OnNextLineBack);
 
   s_offset_page = MakePanel(scr, "TRACK OFFSET");
   s_offset_label = lv_label_create(s_offset_page);
-  lv_obj_set_style_text_font(s_offset_label, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(s_offset_label, &pacer_font_mono_48, 0);
   lv_label_set_text(s_offset_label, "--");
   s_offset_detail_label = lv_label_create(s_offset_page);
-  lv_obj_set_style_text_font(s_offset_detail_label, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(s_offset_detail_label, &pacer_font_mono_20, 0);
   lv_obj_set_style_text_color(s_offset_detail_label, lv_color_hex(0x808080),
                               0);
+  lv_obj_set_style_text_align(s_offset_detail_label, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_text(s_offset_detail_label, "--");
   MakeButton(s_offset_page, "Back", OnOffsetBack);
 
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
   s_brightness_page = MakePanel(scr, "BRIGHTNESS");
   s_brightness_label = lv_label_create(s_brightness_page);
-  lv_obj_set_style_text_font(s_brightness_label, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(s_brightness_label, &pacer_font_mono_48, 0);
   RefreshBrightnessLabel();
   lv_obj_t *slider = lv_slider_create(s_brightness_page);
   lv_obj_set_width(slider, lv_pct(90));
@@ -774,9 +807,36 @@ void BuildDebugMenu(lv_obj_t *scr) {
   MakeButton(s_brightness_page, "Back", OnBrightnessBack);
 #endif
 
+  // Live state on top in the reading size, the boot-time configuration under
+  // it in grey: the page exists to be read as "asked for this, getting that".
+  s_gps_page = MakePanel(scr, "GPS");
+  // Six rows don't fit the shared 320x240 panel; this one gets the screen's
+  // full height and tighter row spacing instead.
+  lv_obj_set_size(s_gps_page, 360, 264);
+  lv_obj_center(s_gps_page);
+  lv_obj_set_style_pad_row(s_gps_page, 4, 0);
+  s_gps_fix_label = lv_label_create(s_gps_page);
+  lv_obj_set_style_text_font(s_gps_fix_label, &pacer_font_mono_20, 0);
+  lv_label_set_text(s_gps_fix_label, "--");
+  // Corrections get the largest type on the page: whether SBAS actually
+  // locked is the question this page is opened to answer.
+  s_gps_corr_label = lv_label_create(s_gps_page);
+  lv_obj_set_style_text_font(s_gps_corr_label, &pacer_font_mono_24, 0);
+  lv_label_set_text(s_gps_corr_label, "--");
+  s_gps_detail_label = lv_label_create(s_gps_page);
+  lv_obj_set_style_text_font(s_gps_detail_label, &pacer_font_mono_14, 0);
+  lv_obj_set_style_text_align(s_gps_detail_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(s_gps_detail_label, "--");
+  s_gps_config_label = lv_label_create(s_gps_page);
+  lv_obj_set_style_text_font(s_gps_config_label, &pacer_font_mono_14, 0);
+  lv_obj_set_style_text_color(s_gps_config_label, lv_color_hex(0x808080), 0);
+  lv_obj_set_style_text_align(s_gps_config_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(s_gps_config_label, "");
+  MakeButton(s_gps_page, "Back", OnGpsBack);
+
   s_logging_page = MakePanel(scr, "LOGGING");
   s_logstats_label = lv_label_create(s_logging_page);
-  lv_obj_set_style_text_font(s_logstats_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(s_logstats_label, &pacer_font_mono_24, 0);
   lv_label_set_text(s_logstats_label, "--");
   lv_obj_t *toggle = MakeButton(s_logging_page, "Stop writing", OnLogToggle);
   s_logtoggle_label = lv_obj_get_child(toggle, 0);
@@ -794,49 +854,54 @@ void BuildScreen() {
   lv_obj_set_style_text_color(scr, lv_color_white(), 0);
 
   s_lap_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_lap_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(s_lap_label, &pacer_font_mono_24, 0);
   lv_obj_align(s_lap_label, LV_ALIGN_TOP_LEFT, 6, 4);
   lv_label_set_text(s_lap_label, "LAP -");
 
   s_clock_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_clock_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(s_clock_label, &pacer_font_mono_24, 0);
   lv_obj_align(s_clock_label, LV_ALIGN_TOP_RIGHT, -6, 4);
   lv_label_set_text(s_clock_label, "--:--");
 
   s_delta_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_delta_label, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(s_delta_label, &pacer_font_mono_48, 0);
   lv_obj_align(s_delta_label, LV_ALIGN_CENTER, 0, -30);
   lv_label_set_text(s_delta_label, "--.--");
 
   s_current_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_current_label, &lv_font_montserrat_32, 0);
+  lv_obj_set_style_text_font(s_current_label, &pacer_font_mono_32, 0);
   lv_obj_align(s_current_label, LV_ALIGN_CENTER, 0, 20);
   lv_label_set_text(s_current_label, "-:--.---");
 
   s_last_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_last_label, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(s_last_label, &pacer_font_mono_20, 0);
   lv_obj_align(s_last_label, LV_ALIGN_BOTTOM_LEFT, 6, -26);
   lv_label_set_text(s_last_label, "LAST --:--.---");
 
   s_best_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_best_label, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(s_best_label, &pacer_font_mono_20, 0);
   lv_obj_align(s_best_label, LV_ALIGN_BOTTOM_RIGHT, -6, -26);
   lv_label_set_text(s_best_label, "BEST --:--.---");
 
   // Full-width strip; long debug text scrolls marquee-style instead of
   // running off screen.
   s_status_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(s_status_label, &pacer_font_mono_14, 0);
   lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x808080), 0);
   lv_obj_set_width(s_status_label, kWidth - 12);
   lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_LEFT, 6, -4);
   lv_label_set_text(s_status_label, "starting...");
 
+  // Own row under LAP/clock rather than between them: the raw fix line is
+  // ~46 monospaced characters, wider than the gap those two leave in the
+  // middle. Full width and centered, kTopRowH below the top edge.
   s_debug_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_debug_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(s_debug_label, &pacer_font_mono_14, 0);
   lv_obj_set_style_text_color(s_debug_label, lv_color_hex(0x808080), 0);
-  lv_obj_align(s_debug_label, LV_ALIGN_TOP_MID, 0, 4);
+  lv_obj_set_width(s_debug_label, kWidth - 12);
+  lv_obj_set_style_text_align(s_debug_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(s_debug_label, LV_ALIGN_TOP_MID, 0, kTopRowH);
   lv_label_set_text(s_debug_label, "");
 
   BuildDebugMenu(scr);
@@ -1006,7 +1071,7 @@ void dashboard_ui_update(const pacer::LiveSnapshot &snap) {
   snprintf(buf, sizeof(buf), "LAP %d", snap.lap_number);
   lv_label_set_text(s_lap_label, buf);
 
-  FormatCountdown(buf, sizeof(buf), snap.session_remaining_s);
+  FormatSessionTime(buf, sizeof(buf), snap.session_elapsed_s);
   lv_label_set_text(s_clock_label, buf);
 
   if (snap.delta_valid) {
@@ -1076,6 +1141,78 @@ void dashboard_ui_set_track_list(const std::vector<DashboardTrack> &tracks,
   lvgl_port_lock(0);
   s_tracks = tracks;
   RefreshTrackList(active_path);
+  lvgl_port_unlock();
+}
+
+void dashboard_ui_set_gps_config(const char *text) {
+  if (!s_disp || !s_gps_config_label || !text) {
+    return;
+  }
+  lvgl_port_lock(0);
+  lv_label_set_text(s_gps_config_label, text);
+  lvgl_port_unlock();
+}
+
+void dashboard_ui_set_gps_state(const DashboardGpsState &state) {
+  if (!s_disp || !s_gps_fix_label) {
+    return;
+  }
+  if (lv_obj_has_flag(s_gps_page, LV_OBJ_FLAG_HIDDEN)) {
+    return;
+  }
+
+  const char *fix = "no fix";
+  switch (state.fix_type) {
+  case 2:
+    fix = "2D fix";
+    break;
+  case 3:
+    fix = "3D fix";
+    break;
+  case 4:
+    fix = "3D + DR";
+    break;
+  default:
+    break;
+  }
+  char buf[64];
+  // gnssFixOK is called out only when it disagrees with fixType: that gap is
+  // the whole reason a sample can look fixed and still be dropped from the
+  // log, and it is invisible on the dashboard's sat count.
+  snprintf(buf, sizeof(buf), "%s%s / %d sat", fix,
+           (state.fix_type != 0 && !state.fix_ok) ? " (not ok)" : "",
+           state.num_sv);
+
+  // The line the SBAS change is judged on. RTK outranks it if it ever shows.
+  const char *corr = "no corrections";
+  lv_color_t corr_color = lv_color_hex(0x808080);
+  if (state.carr_soln == 2) {
+    corr = "RTK fixed";
+    corr_color = lv_color_hex(0x30E050);
+  } else if (state.carr_soln == 1) {
+    corr = "RTK float";
+    corr_color = lv_color_hex(0x30E050);
+  } else if (state.diff_soln) {
+    corr = "SBAS";
+    corr_color = lv_color_hex(0x30E050);
+  }
+
+  char detail[80];
+  if (state.interval_ms > 0) {
+    snprintf(detail, sizeof(detail),
+             "hAcc %.2f m / pDOP %.1f\n%.1f ms measured (%.1f Hz)",
+             state.h_acc_m, state.pdop, state.interval_ms,
+             1000.0 / state.interval_ms);
+  } else {
+    snprintf(detail, sizeof(detail), "hAcc %.2f m / pDOP %.1f\n-- ms measured",
+             state.h_acc_m, state.pdop);
+  }
+
+  lvgl_port_lock(0);
+  lv_label_set_text(s_gps_fix_label, buf);
+  lv_label_set_text(s_gps_corr_label, corr);
+  lv_obj_set_style_text_color(s_gps_corr_label, corr_color, 0);
+  lv_label_set_text(s_gps_detail_label, detail);
   lvgl_port_unlock();
 }
 
@@ -1169,7 +1306,9 @@ void dashboard_ui_set_track_offset(double lateral_m, double half_width_m,
     snprintf(detail, sizeof(detail), "--");
   } else {
     snprintf(buf, sizeof(buf), "%+.1f m", lateral_m);
-    snprintf(detail, sizeof(detail), "gate %u/%u   half-width %.1f m",
+    // Two lines: in the monospaced face this doesn't fit the panel's width on
+    // one, and an explicit break beats whatever the wrap lands on.
+    snprintf(detail, sizeof(detail), "gate %u/%u\nhalf-width %.1f m",
              (unsigned)gate, (unsigned)gate_count, half_width_m);
     off_track = std::fabs(lateral_m) > half_width_m;
   }

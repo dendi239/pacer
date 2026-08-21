@@ -1,5 +1,6 @@
 #include "ubx_gps.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 #include "driver/uart.h"
@@ -136,16 +137,39 @@ void send_valset(const CfgItem *items, size_t count) {
 // Configuration keys (u-blox M8 ignores VALSET — M9/M10 assumed, which is
 // what runs 25 Hz anyway).
 constexpr uint32_t kKeyRateMeas = 0x30210001;       // U2, ms per measurement
+constexpr uint32_t kKeyRateNav = 0x30210002;        // U2, measurements per fix
+
+// One measurement every 40 ms, one solution per measurement -> 25 Hz.
+constexpr uint32_t kRateMeasMs = 40;
 constexpr uint32_t kKeyMsgoutPvtUart1 = 0x20910007; // U1, rate on UART1
 constexpr uint32_t kKeyUart1OutUbx = 0x10740001;    // bool
 constexpr uint32_t kKeyUart1OutNmea = 0x10740002;   // bool
 constexpr uint32_t kKeyUart1Baud = 0x40520001;      // U4
+
+// CFG-NAVSPG — how the receiver's own Kalman filter models the vehicle.
+// The size of each value is encoded in bits 30:28 of the key: 0x2... is one
+// byte, 0x3... two, 0x4... four (same rule the keys above follow).
+constexpr uint32_t kKeyNavspgFixMode = 0x20110011;      // E1
+constexpr uint32_t kKeyNavspgDynModel = 0x20110021;     // E1
+constexpr uint32_t kKeyNavspgInfilMinElev = 0x201100A4; // I1, degrees
+constexpr uint32_t kKeyNavspgOutfilPacc = 0x301100B3;   // U2, metres
 
 // CFG-SIGNAL (all bool). The M10 only reaches 25 Hz on a single
 // constellation — with GLONASS/Galileo/BeiDou tracking it clamps the
 // solution rate well below the 40 ms we ask for — so keep GPS L1C/A and
 // switch every other GNSS off. Both the per-constellation *_ENA and its
 // signal keys have to go, otherwise the receiver keeps the band alive.
+//
+// SBAS is the exception and stays on. It is a correction stream applied to
+// the GPS L1 pseudoranges, not another constellation to solve against, so
+// it costs one geostationary channel rather than a whole band. What it buys
+// is the error that dominates a standalone L1 fix: residual ionospheric
+// delay and satellite ephemeris/clock error. Those drift slowly enough to
+// hold steady across a whole lap, so they don't roughen the trace — they
+// displace the entire lap sideways, which is what leaves consecutive laps
+// metres apart. Whether the M10 still holds 40 ms with it enabled is an
+// empirical question, hence the Kconfig switch: check that the logged fix
+// interval is still a steady 40 ms before trusting a session.
 constexpr uint32_t kKeySigGpsEna = 0x1031001F;
 constexpr uint32_t kKeySigGpsL1caEna = 0x10310001;
 constexpr uint32_t kKeySigSbasEna = 0x10310020;
@@ -161,9 +185,17 @@ constexpr uint32_t kKeySigQzssL1sEna = 0x10310014;
 constexpr uint32_t kKeySigGloEna = 0x10310025;
 constexpr uint32_t kKeySigGloL1Ena = 0x10310018;
 
-constexpr CfgItem kGpsOnlySignals[] = {
+// A `bool` Kconfig is defined as 1 when set and left undefined when clear,
+// so fold it to a value the table can hold.
+#ifdef CONFIG_PACER_GPS_SBAS
+constexpr uint32_t kSbas = 1;
+#else
+constexpr uint32_t kSbas = 0;
+#endif
+
+constexpr CfgItem kSignalSet[] = {
     {kKeySigGpsEna, 1, 1},      {kKeySigGpsL1caEna, 1, 1},
-    {kKeySigSbasEna, 0, 1},     {kKeySigSbasL1caEna, 0, 1},
+    {kKeySigSbasEna, kSbas, 1}, {kKeySigSbasL1caEna, kSbas, 1},
     {kKeySigGalEna, 0, 1},      {kKeySigGalE1Ena, 0, 1},
     {kKeySigBdsEna, 0, 1},      {kKeySigBdsB1Ena, 0, 1},
     {kKeySigBdsB1cEna, 0, 1},   {kKeySigQzssEna, 0, 1},
@@ -171,24 +203,48 @@ constexpr CfgItem kGpsOnlySignals[] = {
     {kKeySigGloEna, 0, 1},      {kKeySigGloL1Ena, 0, 1},
 };
 
+// The navigation filter's model of what it is riding on. Left unset, the
+// receiver assumes "portable", whose acceleration limits a kart blows past
+// in every corner — the filter then trusts its own prediction over the
+// measurements and the trace lags the real line, cutting apexes and drifting
+// laterally. `automotive` raises those limits; `airborne <2g` removes the
+// ground-vehicle assumptions entirely (no cornering model, no vertical-speed
+// clamp) and is the one to try if the trace still rounds off apexes.
+constexpr CfgItem kNavFilter[] = {
+    {kKeyNavspgDynModel, CONFIG_PACER_GPS_DYNMODEL, 1},
+    // 3D-only. A 2D fallback solves position against an *assumed* altitude,
+    // and any error in that assumption lands in the horizontal fix — exactly
+    // the wander this is meant to remove. A dropped epoch is easier to
+    // handle than a confidently wrong one: fixType goes to 0 and the timing
+    // path's HasFix() skips it.
+    {kKeyNavspgFixMode, 2, 1},
+    {kKeyNavspgInfilMinElev, CONFIG_PACER_GPS_MIN_ELEV_DEG, 1},
+    {kKeyNavspgOutfilPacc, CONFIG_PACER_GPS_PACC_MASK_M, 2},
+};
+
 void push_config(bool include_baud) {
-  CfgItem items[5];
+  CfgItem items[6];
   size_t n = 0;
   if (include_baud) {
     items[n++] = {kKeyUart1Baud, (uint32_t)kBaud, 4};
   }
   items[n++] = {kKeyUart1OutUbx, 1, 1};
   items[n++] = {kKeyUart1OutNmea, 0, 1};
-  items[n++] = {kKeyRateMeas, 40, 2}; // 40 ms -> 25 Hz
+  items[n++] = {kKeyRateMeas, kRateMeasMs, 2};
+  items[n++] = {kKeyRateNav, 1, 2}; // one solution per measurement
   items[n++] = {kKeyMsgoutPvtUart1, 1, 1};
   send_valset(items, n);
+
+  // Own VALSET, for the same reason the signal set below gets one: a NAK on
+  // any single key rejects the whole message, and a receiver that doesn't
+  // know one of these shouldn't cost us the port/rate config above.
+  send_valset(kNavFilter, sizeof(kNavFilter) / sizeof(kNavFilter[0]));
 
   // Separate VALSET: one NAK rejects the whole set, and a receiver that
   // doesn't know a given signal key shouldn't cost us the port/rate config
   // above. Changing the constellations restarts the GNSS subsystem, so this
   // goes last.
-  send_valset(kGpsOnlySignals,
-              sizeof(kGpsOnlySignals) / sizeof(kGpsOnlySignals[0]));
+  send_valset(kSignalSet, sizeof(kSignalSet) / sizeof(kSignalSet[0]));
 }
 
 //------------------------------ reader task -------------------------------//
@@ -308,7 +364,44 @@ void reader_task(void *) {
   }
 }
 
+// CFG-NAVSPG-DYNMODEL values, spelled the way the Kconfig prompt does.
+const char *dyn_model_name(int model) {
+  switch (model) {
+  case 0:
+    return "portable";
+  case 4:
+    return "automotive";
+  case 6:
+    return "airborne <1g";
+  case 7:
+    return "airborne <2g";
+  default:
+    return "?";
+  }
+}
+
 } // namespace
+
+const char *ubx_gps_config_summary() {
+  // Built once and kept: every input is a compile-time constant, and the
+  // debug page asks for this on every open.
+  static char summary[160];
+  static bool built = false;
+  if (!built) {
+    built = true;
+    // ASCII only, and three lines: the built-in LVGL fonts this renders in
+    // carry no more, and a fourth line runs the debug panel off the screen.
+    snprintf(summary, sizeof(summary),
+             "%u Hz / %d baud\n"
+             "GPS L1C/A%s / %s\n"
+             "3D only / elev %d deg / pAcc %d m",
+             (unsigned)(1000 / kRateMeasMs), kBaud,
+             kSbas ? " + SBAS" : " only",
+             dyn_model_name(CONFIG_PACER_GPS_DYNMODEL),
+             CONFIG_PACER_GPS_MIN_ELEV_DEG, CONFIG_PACER_GPS_PACC_MASK_M);
+  }
+  return summary;
+}
 
 esp_err_t ubx_gps_start(ubx_pvt_callback_t on_pvt, void *ctx) {
   s_callback = on_pvt;
@@ -322,6 +415,12 @@ esp_err_t ubx_gps_start(ubx_pvt_callback_t on_pvt, void *ctx) {
   cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
   cfg.source_clk = UART_SCLK_DEFAULT;
 
+  // 4096 B of RX buffer is how long the reader task may stall before frames
+  // are lost, and it is set by the *message rate*, not the baud: NAV-PVT is
+  // 100 bytes an epoch, so this holds ~40 epochs, i.e. 1.6 s at 25 Hz. Note
+  // that raising kBaud buys no extra stall tolerance — it only drains each
+  // frame off the wire faster. Grow this instead if another message is
+  // enabled or the main loop gains a long blocking step.
   ESP_ERROR_CHECK(uart_driver_install(kUart, 4096, 0, 0, nullptr, 0));
   ESP_ERROR_CHECK(uart_param_config(kUart, &cfg));
   ESP_ERROR_CHECK(uart_set_pin(kUart, CONFIG_PACER_GPS_TX_GPIO,

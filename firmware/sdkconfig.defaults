@@ -2,11 +2,12 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
-# Fonts used by dashboard_ui
+# dashboard_ui draws in its own monospaced faces (components/dashboard_ui/
+# fonts), so the only built-in left is the 14 px one LV_FONT_DEFAULT points at.
 CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-CONFIG_LV_FONT_MONTSERRAT_24=y
-CONFIG_LV_FONT_MONTSERRAT_32=y
-CONFIG_LV_FONT_MONTSERRAT_48=y
+# CONFIG_LV_FONT_MONTSERRAT_20 is not set
+# CONFIG_LV_FONT_MONTSERRAT_24 is not set
+# CONFIG_LV_FONT_MONTSERRAT_32 is not set
+# CONFIG_LV_FONT_MONTSERRAT_48 is not set
 # Long filenames on SD (tracks/*.json have >8.3 names)
 CONFIG_FATFS_LFN_HEAP=y

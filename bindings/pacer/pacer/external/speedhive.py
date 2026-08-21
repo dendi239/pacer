@@ -36,17 +36,16 @@ def _get_competitor_data(base_url: str, pos: int) -> pd.DataFrame:
     return df
 
 
-@functools.lru_cache
 def _get_laptimes(base_url: str, results_df: pd.DataFrame) -> pd.DataFrame:
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         return pd.DataFrame(
             dict(
                 executor.map(
-                    lambda i_row: (
-                        i_row[1]["Competitor"],
-                        _get_competitor_data(base_url, i_row[0])["Lap Time"],
+                    lambda i_i_row: (
+                        i_i_row[1][1]["Competitor"],
+                        _get_competitor_data(base_url, i_i_row[0])["Lap Time"],
                     ),
-                    results_df.iterrows(),
+                    enumerate(results_df.iterrows(), 1),
                 )
             )
         )
