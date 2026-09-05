@@ -29,6 +29,15 @@ std::pair<double, double> LatLonFromCanvas(const ImVec2 &screen,
                                            const ImVec2 &canvas_min,
                                            const ImVec2 &canvas_max);
 
+/// Total magnification of the view as a continuous zoom level
+/// (tile zoom + log2(scale)), i.e. the slippy-map zoom a viewer sees.
+double CanvasZoomLevel(const TileCanvasView &view);
+
+/// Sets the continuous zoom level about the view center, redistributing it
+/// between tile zoom and scale so tiles stay near native resolution.
+/// Clamped to [kMinSatelliteZoom, kMaxSatelliteZoom + 2].
+void SetCanvasZoomLevel(TileCanvasView &view, double zoom_level);
+
 /// Shifts the view center by a screen-space delta (drag panning): dragging
 /// right moves the map content right.
 void PanCanvas(TileCanvasView &view, const ImVec2 &delta);

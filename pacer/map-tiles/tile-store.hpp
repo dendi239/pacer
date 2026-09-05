@@ -5,6 +5,8 @@
 #include <string>
 #include <tuple>
 
+#include <pacer/map-tiles/tile-queue.hpp>
+
 namespace pacer {
 
 struct MapTileImage {
@@ -23,6 +25,9 @@ struct TileLoader;
 // ApplyResults() turns finished downloads into GL textures and must run on
 // the thread owning the GL context. The constructor/destructor own the curl
 // global state and the worker lifetime, so teardown order can't go wrong.
+//
+// Requests are throttled rather than fired off as they arrive; see
+// TileRequestQueue for the policy.
 class TileStore {
 public:
   TileStore();
@@ -31,27 +36,34 @@ public:
   TileStore(const TileStore &) = delete;
   TileStore &operator=(const TileStore &) = delete;
 
-  /// Enqueues a download unless the tile is cached or in flight. Cheap
-  /// no-op otherwise, so it's fine to call for the whole visible range
-  /// every frame.
+  /// Requests a tile unless it is already cached, downloading, or backing
+  /// off after a failure. Cheap no-op otherwise, so it is fine -- and
+  /// expected -- to call for the whole visible range every frame: that
+  /// repetition is what keeps a queued tile from being dropped.
   void RequestTile(int zoom, int x, int y);
 
-  /// Uploads downloads that finished since the last call. Call once per
-  /// frame on the render thread.
+  /// Uploads downloads that finished since the last call, forgets tiles the
+  /// caller has stopped asking for, and starts as many queued downloads as
+  /// there are free slots. Call once per frame on the thread owning the GL
+  /// context.
   void ApplyResults();
 
   /// Cached tile lookup; returns nullptr for tiles never requested.
   const MapTileImage *Find(int zoom, int x, int y) const;
 
-  /// Number of tiles requested but not yet applied. Lets the app raise its
-  /// idle frame rate while downloads are in flight (the render loop is not
-  /// woken by worker threads), and idle hard once everything has landed.
-  size_t PendingCount() const { return pending_; }
+  /// Number of tiles queued or downloading but not yet applied. Lets the
+  /// app raise its idle frame rate while downloads are outstanding (the
+  /// render loop is not woken by worker threads), and idle hard once
+  /// everything has landed.
+  size_t PendingCount() const { return queue_.PendingCount(); }
 
 private:
-  std::map<std::tuple<int, int, int>, MapTileImage> cache_;
+  /// Starts whatever the queue says is ready, and marks it as loading.
+  void Dispatch(TileRequestQueue::Clock::time_point now);
+
+  std::map<TileRequestQueue::Key, MapTileImage> cache_;
+  TileRequestQueue queue_;
   std::unique_ptr<TileLoader> loader_;
-  size_t pending_ = 0;
 };
 
 } // namespace pacer

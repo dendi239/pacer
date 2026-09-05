@@ -50,19 +50,24 @@ void PanCanvas(TileCanvasView &view, const ImVec2 &delta) {
   WrapLongitude(view);
 }
 
-// Applies a scale factor while keeping tiles near native resolution: the
-// continuous zoom (zoom + log2(scale)) is redistributed so `scale` stays
-// close to 1 and whole steps land in `zoom` instead.
-static void ZoomBy(TileCanvasView &view, float factor) {
-  double continuous =
-      view.zoom + std::log2(static_cast<double>(view.scale) * factor);
-  continuous =
-      std::clamp(continuous, static_cast<double>(kMinSatelliteZoom),
-                 static_cast<double>(kMaxSatelliteZoom) + 2.0);
-  int zoom = std::clamp(static_cast<int>(std::lround(continuous)),
+double CanvasZoomLevel(const TileCanvasView &view) {
+  return view.zoom + std::log2(static_cast<double>(view.scale));
+}
+
+// Keeps tiles near native resolution: the continuous zoom is redistributed
+// so `scale` stays close to 1 and whole steps land in `zoom` instead.
+void SetCanvasZoomLevel(TileCanvasView &view, double zoom_level) {
+  zoom_level = std::clamp(zoom_level, static_cast<double>(kMinSatelliteZoom),
+                          static_cast<double>(kMaxSatelliteZoom) + 2.0);
+  int zoom = std::clamp(static_cast<int>(std::lround(zoom_level)),
                         kMinSatelliteZoom, kMaxSatelliteZoom);
   view.zoom = zoom;
-  view.scale = static_cast<float>(std::exp2(continuous - zoom));
+  view.scale = static_cast<float>(std::exp2(zoom_level - zoom));
+}
+
+static void ZoomBy(TileCanvasView &view, float factor) {
+  SetCanvasZoomLevel(view, CanvasZoomLevel(view) +
+                               std::log2(static_cast<double>(factor)));
 }
 
 void ZoomCanvasAt(TileCanvasView &view, float factor, const ImVec2 &pivot,

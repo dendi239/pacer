@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -105,6 +106,15 @@ static TrackPoint ScreenToWorld(const ImVec2 &screen, const ImVec2 &canvas_min,
   auto [lat, lon] =
       pacer::LatLonFromCanvas(screen, state.view, canvas_min, canvas_max);
   return TrackPoint{static_cast<float>(lat), static_cast<float>(lon)};
+}
+
+// Folds an arbitrary typed longitude into [-180, 180].
+static double WrapLongitude(double lon) {
+  lon = std::fmod(lon + 180.0, 360.0);
+  if (lon < 0.0) {
+    lon += 360.0;
+  }
+  return lon - 180.0;
 }
 
 static bool PointHit(const ImVec2 &screen_pos, const ImVec2 &point_screen,
@@ -259,6 +269,38 @@ static void DrawControlPanel(TrackState &state, float width) {
   ImGui::SameLine();
   ImGui::Checkbox("Show map", &state.show_map);
 
+  // Map center and zoom, for jumping the view to a circuit that no gate
+  // covers yet (dragging from the default location only gets you so far).
+  // Coordinates apply on Enter, so a half-typed latitude doesn't send the
+  // view -- and a burst of tile requests -- to the middle of the ocean.
+  ImGui::Text("Lat");
+  ImGui::SameLine();
+  ImGui::PushItemWidth(85.0f);
+  if (ImGui::InputDouble("##view_lat", &state.view.lat, 0.0, 0.0, "%.5f",
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+    state.view.lat = std::clamp(state.view.lat, -85.05112878, 85.05112878);
+  }
+  ImGui::SameLine();
+  ImGui::Text("Lon");
+  ImGui::SameLine();
+  if (ImGui::InputDouble("##view_lon", &state.view.lon, 0.0, 0.0, "%.5f",
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+    state.view.lon = WrapLongitude(state.view.lon);
+  }
+  ImGui::PopItemWidth();
+
+  ImGui::Text("Zoom");
+  ImGui::SameLine();
+  ImGui::PushItemWidth(-1.0f);
+  float zoom_level = static_cast<float>(pacer::CanvasZoomLevel(state.view));
+  if (ImGui::SliderFloat("##view_zoom", &zoom_level,
+                         static_cast<float>(pacer::kMinSatelliteZoom),
+                         static_cast<float>(pacer::kMaxSatelliteZoom) + 2.0f,
+                         "%.1f")) {
+    pacer::SetCanvasZoomLevel(state.view, zoom_level);
+  }
+  ImGui::PopItemWidth();
+
   ImGui::Separator();
 
   // Selected segment editor, save/load and segment table live in left column.
@@ -336,8 +378,7 @@ static void DrawControlPanel(TrackState &state, float width) {
       "selected track file.");
   state.picker.Draw("track_file");
   if (ImGui::Button("Save##save")) {
-    if (state.picker.path.empty() ||
-        !SaveState(state, state.picker.path)) {
+    if (state.picker.path.empty() || !SaveState(state, state.picker.path)) {
       state.last_message =
           "Unable to write state to '" + state.picker.path + "'";
       HelloImGui::Log(HelloImGui::LogLevel::Error, "%s",

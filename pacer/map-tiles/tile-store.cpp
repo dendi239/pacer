@@ -186,7 +186,7 @@ static bool UpdateMapTileTexture(const std::vector<unsigned char> &image_data,
 
 TileStore::TileStore() {
   curl_global_init(CURL_GLOBAL_DEFAULT);
-  loader_ = std::make_unique<TileLoader>(4);
+  loader_ = std::make_unique<TileLoader>(TileRequestQueue::kMaxInFlight);
 }
 
 TileStore::~TileStore() {
@@ -203,32 +203,49 @@ void TileStore::RequestTile(int zoom, int x, int y) {
   if (x < 0 || x >= n || y < 0 || y >= n)
     return;
 
-  auto &tile = cache_[std::make_tuple(zoom, x, y)];
-  if (tile.valid || tile.status == "Loading")
+  TileRequestQueue::Key key{zoom, x, y};
+  auto &tile = cache_[key];
+  if (tile.valid)
     return;
 
-  tile.status = "Loading";
-  ++pending_;
-  loader_->Enqueue(TileRequest{zoom, x, y, SatelliteTileUrl(zoom, x, y)});
+  auto now = TileRequestQueue::Clock::now();
+  queue_.Want(key, now);
+  Dispatch(now);
 }
 
-void TileStore::ApplyResults() {
-  for (auto &result : loader_->DrainResults()) {
-    --pending_;
-    auto &tile = cache_[std::make_tuple(result.zoom, result.x, result.y)];
-    if (!result.ok) {
-      tile.status = "Error: " + result.error;
-      continue;
-    }
-    std::string error;
-    if (!UpdateMapTileTexture(result.image_data, result.url, tile, error)) {
-      tile.status = "Error: " + error;
-    }
+void TileStore::Dispatch(TileRequestQueue::Clock::time_point now) {
+  for (const auto &key : queue_.TakeReady(now)) {
+    auto [zoom, x, y] = key;
+    cache_[key].status = "Loading";
+    loader_->Enqueue(TileRequest{zoom, x, y, SatelliteTileUrl(zoom, x, y)});
   }
 }
 
+void TileStore::ApplyResults() {
+  auto now = TileRequestQueue::Clock::now();
+
+  for (auto &result : loader_->DrainResults()) {
+    TileRequestQueue::Key key{result.zoom, result.x, result.y};
+    auto &tile = cache_[key];
+
+    std::string error;
+    bool ok = result.ok;
+    if (!ok) {
+      error = result.error;
+    } else if (!UpdateMapTileTexture(result.image_data, result.url, tile,
+                                     error)) {
+      ok = false;
+    }
+    if (!ok)
+      tile.status = "Error: " + error;
+    queue_.Finish(key, ok, now);
+  }
+
+  Dispatch(now);
+}
+
 const MapTileImage *TileStore::Find(int zoom, int x, int y) const {
-  auto it = cache_.find(std::make_tuple(zoom, x, y));
+  auto it = cache_.find(TileRequestQueue::Key{zoom, x, y});
   return it == cache_.end() ? nullptr : &it->second;
 }
 
