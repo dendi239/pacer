@@ -54,6 +54,12 @@ struct TrackState {
   pacer::TileCanvasView view;
   pacer::TileStore tiles;
   pacer::TrackFilePicker picker;
+
+  // Staging copies behind the Lat/Lon boxes: typing edits these, and the
+  // view only follows once the box is committed (Enter, Tab or clicking
+  // away), so a half-typed coordinate never moves the map.
+  double lat_edit = 0.0;
+  double lon_edit = 0.0;
 };
 
 // Records the current document (segments + track_closed) onto the undo
@@ -234,9 +240,9 @@ static bool LoadState(TrackState &state, const std::string &filename) {
 
 // Left column: view controls, selected-segment editor, file load/save, and
 // the segment table.
-static void DrawControlPanel(TrackState &state, float width) {
+static void DrawControlPanel(TrackState &state, float width, float height) {
   // Child window (scrollable) so it doesn't scroll the map.
-  ImGui::BeginChild("left_panel", ImVec2(width, 0), true,
+  ImGui::BeginChild("left_panel", ImVec2(width, height), true,
                     ImGuiWindowFlags_None);
   ImGui::TextWrapped(
       "Draw a sequence of gates (inner edge to outer edge) around the "
@@ -273,26 +279,32 @@ static void DrawControlPanel(TrackState &state, float width) {
   ImGui::SameLine();
   ImGui::Checkbox("Show map", &state.show_map);
 
-  // Map center and zoom, for jumping the view to a circuit that no gate
-  // covers yet (dragging from the default location only gets you so far).
-  // Coordinates apply on Enter, so a half-typed latitude doesn't send the
-  // view -- and a burst of tile requests -- to the middle of the ocean.
+  // Map center and zoom on one row, for jumping the view to a circuit that
+  // no gate covers yet (dragging from the default location only gets you so
+  // far). Coordinates apply when the box is committed, so a half-typed
+  // latitude doesn't send the view -- and a burst of tile requests -- to the
+  // middle of the ocean.
   ImGui::Text("Lat");
   ImGui::SameLine();
   ImGui::PushItemWidth(85.0f);
-  if (ImGui::InputDouble("##view_lat", &state.view.lat, 0.0, 0.0, "%.5f",
-                         ImGuiInputTextFlags_EnterReturnsTrue)) {
-    state.view.lat = std::clamp(state.view.lat, -85.05112878, 85.05112878);
+  ImGui::InputDouble("##view_lat", &state.lat_edit, 0.0, 0.0, "%.5f");
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    state.view.lat = std::clamp(state.lat_edit, -85.05112878, 85.05112878);
+  } else if (!ImGui::IsItemActive()) {
+    state.lat_edit = state.view.lat; // follow pans/zooms while not editing
   }
   ImGui::SameLine();
   ImGui::Text("Lon");
   ImGui::SameLine();
-  if (ImGui::InputDouble("##view_lon", &state.view.lon, 0.0, 0.0, "%.5f",
-                         ImGuiInputTextFlags_EnterReturnsTrue)) {
-    state.view.lon = WrapLongitude(state.view.lon);
+  ImGui::InputDouble("##view_lon", &state.lon_edit, 0.0, 0.0, "%.5f");
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    state.view.lon = WrapLongitude(state.lon_edit);
+  } else if (!ImGui::IsItemActive()) {
+    state.lon_edit = state.view.lon;
   }
   ImGui::PopItemWidth();
 
+  ImGui::SameLine();
   ImGui::Text("Zoom");
   ImGui::SameLine();
   ImGui::PushItemWidth(-1.0f);
@@ -697,17 +709,21 @@ static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg,
                         pacer::IsDarkTheme() ? IM_COL32(12, 12, 18, 255)
                                              : IM_COL32(232, 232, 238, 255));
+  // No padding: the tiles fill the child edge to edge. With padding, the
+  // strip between the border and the first tile shows through as a stray
+  // line down the left of the map.
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::BeginChild("map_canvas", canvas_size, true,
                     ImGuiWindowFlags_NoScrollbar);
-  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 4.0f);
+  ImGui::PopStyleVar();
 
   ImVec2 canvas_min = ImGui::GetCursorScreenPos();
+  ImVec2 draw_size = ImGui::GetContentRegionAvail();
   ImVec2 canvas_max =
-      ImVec2(canvas_min.x + canvas_size.x, canvas_min.y + canvas_size.y);
+      ImVec2(canvas_min.x + draw_size.x, canvas_min.y + draw_size.y);
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
-  ImGui::Dummy(canvas_size);
+  ImGui::Dummy(draw_size);
   bool hovered = ImGui::IsItemHovered();
 
   if (state.show_map) {
@@ -781,18 +797,33 @@ static void ShowAnnotatorGui(TrackState &state) {
 #endif
   ImGui::Begin("Track Annotator", nullptr, window_flags);
 
+  // HelloImGui draws the status bar as a separate always-on-top window
+  // pinned to the bottom of the viewport. Where this window reaches under
+  // it, keep that much height clear so the bar doesn't cover the last row
+  // of the panel or the map.
+  float status_overlap = 0.0f;
+  if (HelloImGui::GetRunnerParams()->imGuiWindowParams.showStatusBar) {
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    float status_top =
+        vp->Pos.y + vp->Size.y - ImGui::GetFrameHeight() * 1.4f;
+    float content_bottom = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y -
+                           ImGui::GetStyle().WindowPadding.y;
+    status_overlap = std::max(0.0f, content_bottom - status_top);
+  }
+
   // Two-column layout: left = controls (~30%), right = map (~70%)
   float avail_w = ImGui::GetContentRegionAvail().x;
   float left_w = avail_w * 0.30f;
+  float body_h =
+      std::max(200.0f, ImGui::GetContentRegionAvail().y - status_overlap);
   ImGui::Columns(2, "main_columns", false);
   ImGui::SetColumnWidth(0, left_w);
 
-  DrawControlPanel(state, left_w);
+  DrawControlPanel(state, left_w, body_h);
   ImGui::NextColumn();
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
-  float canvas_h = std::max(200.0f, avail.y);
-  DrawMapCanvas(state, ImVec2(avail.x, canvas_h));
+  DrawMapCanvas(state, ImVec2(avail.x, body_h));
 
   ImGui::Columns(1);
   ImGui::End();
@@ -835,6 +866,9 @@ int main(int argc, char **argv) {
       state.picker.path = argv[++i];
     }
   }
+
+  state.lat_edit = state.view.lat;
+  state.lon_edit = state.view.lon;
 
   if (std::filesystem::exists(state.picker.path)) {
     if (LoadState(state, state.picker.path)) {
