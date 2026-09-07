@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <format>
 
 #include <pacer/session/session.hpp>
 
@@ -247,6 +248,80 @@ TEST_CASE("Sources are addressed by id, not position", "[session][lapref]") {
   REQUIRE_FALSE(session.ResolveLap({.source_id = 99, .lap_index = 0}));
   // No track, so no laps to resolve even for a live source.
   REQUIRE_FALSE(session.ResolveLap({.source_id = second->id, .lap_index = 0}));
+}
+
+TEST_CASE("A comparison holds laps from any source on its track",
+          "[session][comparison]") {
+  pacer::Session session;
+  pacer::Source *first = session.NewSource();
+  REQUIRE(first->LoadTrack("tracks/daytona-milton-keynes.json"));
+  first->files.push_back(MakeFile("a.dat", 5, 0));
+  first->MarkDirty();
+  first->Update();
+
+  // A second source on the same track, and a third on another one.
+  pacer::Source *same_track = session.NewSource(); // inherits the track
+  pacer::Source *other_track = session.NewSource();
+  REQUIRE(other_track->LoadTrack("tracks/llandow.json"));
+
+  // Laps only exist once data crosses the start line, which the synthetic
+  // files above never do -- so reach past AddLap's lap-index check by
+  // asking WhyNotAddable about the track instead.
+  pacer::Comparison *comparison = session.NewComparison();
+  REQUIRE(comparison->laps.empty());
+  REQUIRE_FALSE(comparison->HasTrack());
+
+  SECTION("an empty comparison adopts the first lap's track") {
+    // Nothing to adopt while the source has no laps.
+    REQUIRE(session.WhyNotAddable(*comparison, {first->id, 0}) ==
+            "that lap no longer exists");
+  }
+
+  SECTION("a source with no track cannot contribute") {
+    pacer::Source *untracked = session.NewSource();
+    untracked->track = pacer::ReferenceTrack{};
+    untracked->track_path.clear();
+    REQUIRE(session.WhyNotAddable(*comparison, {untracked->id, 0}) ==
+            std::format("{} has no reference track", untracked->name));
+  }
+
+  SECTION("laps from a different track are refused once one is adopted") {
+    // Adopt a track directly, as the first successful drop would.
+    comparison->track = first->track;
+    comparison->track_path = first->track_path;
+    comparison->laps.push_back({first->id, 0});
+
+    REQUIRE(session.WhyNotAddable(*comparison, {same_track->id, 0}) ==
+            "that lap no longer exists");
+    REQUIRE(session.WhyNotAddable(*comparison, {other_track->id, 0}) ==
+            std::format("{} is on a different track", other_track->name));
+  }
+
+  SECTION("emptying a comparison frees it to adopt another track") {
+    comparison->track = first->track;
+    comparison->track_path = first->track_path;
+    comparison->laps.push_back({first->id, 0});
+
+    session.RemoveLap(comparison, {first->id, 0});
+    REQUIRE_FALSE(comparison->HasTrack());
+    REQUIRE(comparison->track_path.empty());
+  }
+
+  SECTION("removing a source drops its laps from every comparison") {
+    comparison->track = first->track;
+    comparison->track_path = first->track_path;
+    comparison->laps = {{first->id, 0}, {same_track->id, 3}};
+
+    session.Remove(first->id);
+    REQUIRE(comparison->laps.size() == 1);
+    REQUIRE(comparison->laps[0] == pacer::LapRef{same_track->id, 3});
+  }
+}
+
+TEST_CASE("Lap times read like a timing screen", "[session]") {
+  REQUIRE(pacer::FormatLapTime(67.104) == "1:07.104");
+  REQUIRE(pacer::FormatLapTime(9.5) == "0:09.500");
+  REQUIRE(pacer::FormatLapTime(0) == "--");
 }
 
 TEST_CASE("A new source inherits the previous one's track", "[session]") {

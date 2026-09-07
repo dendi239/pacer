@@ -9,15 +9,6 @@
 
 namespace pacer {
 
-/// ImGui drag-and-drop payload type for a lap: the payload itself is a
-/// LapRef. Dragged from a source's lap chart or lap table, dropped on a
-/// comparison.
-inline constexpr const char *kLapDragPayload = "PACER_LAP";
-
-/// Formats a lap time the way a timing screen does: "1:07.104". Sector
-/// times are short enough to read as plain seconds, so they don't use this.
-std::string FormatLapTime(double seconds);
-
 /// The UI over one Source: the panels the user sets a recording up with.
 /// Each panel draws its own contents only -- the app owns the windows they
 /// live in, so they can be docked, closed and reopened independently.
@@ -51,6 +42,10 @@ struct SourceView {
 
   /// Lap and sector times.
   void DrawLapTablePanel();
+
+  /// Plots the source's reference track gates in the map's frame. Call
+  /// between BeginPlot and EndPlot on the source map.
+  void PlotTrackGates() const;
 
   /// The source's samples laid out on its own clock: speed and fix accuracy
   /// over one shared time axis, the files that make it up as labelled bands,

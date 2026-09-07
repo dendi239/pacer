@@ -30,6 +30,15 @@ struct LapRef {
   std::string Label() const;
 };
 
+/// ImGui drag-and-drop payload type for a lap; the payload itself is a
+/// LapRef. Dragged from a source's lap chart or lap table, dropped on a
+/// comparison.
+inline constexpr const char *kLapDragPayload = "PACER_LAP";
+
+/// Formats a lap time the way a timing screen does: "1:07.104". Sector
+/// times are short enough to read as plain seconds, so they don't use this.
+std::string FormatLapTime(double seconds);
+
 /// One recording file inside a source. `samples` is the file exactly as it
 /// was loaded and is never mutated; trimming only moves the
 /// [BeginIndex(), EndIndex()) window that Source::Rebuild() feeds into the
@@ -159,12 +168,36 @@ private:
   bool dirty_ = true;
 };
 
-/// Everything the app has open: the sources being set up and (later) the
+/// A set of laps held side by side. The laps can come from any source, but
+/// they all have to be on the same track: a delta is only meaningful when
+/// every lap is resampled against the same gates.
+struct Comparison {
+  int id = 0;
+  std::string name;
+
+  /// In the order they were added. A lap's position here is what picks its
+  /// colour, so the first lap dropped in is always the first colour --
+  /// which a hash of the lap id would not be.
+  std::vector<LapRef> laps;
+
+  /// Adopted from the first lap added; empty until then.
+  ReferenceTrack track;
+  std::string track_path;
+
+  bool HasTrack() const { return !track.segments.empty(); }
+
+  /// Position of `ref` in `laps`, or -1.
+  int IndexOf(LapRef ref) const;
+  bool Contains(LapRef ref) const { return IndexOf(ref) >= 0; }
+};
+
+/// Everything the app has open: the sources being set up, and the
 /// comparisons built from their laps.
 struct Session {
   /// Held by pointer so a Source's address -- and the `Laps *` that views
   /// hold into it -- survives adding and removing other sources.
   std::vector<std::unique_ptr<Source>> sources;
+  std::vector<std::unique_ptr<Comparison>> comparisons;
 
   /// Appends a source named "Source N", inheriting the previous source's
   /// reference track so a session on one circuit costs no extra clicks.
@@ -176,6 +209,8 @@ struct Session {
   /// Position of `source_id` in `sources`, or -1.
   int IndexOf(int source_id) const;
 
+  /// Removes the source and every lap of it from every comparison, so no
+  /// comparison is left holding a LapRef that resolves to nothing.
   void Remove(int source_id);
 
   /// The lap `ref` names, or nullopt when the source is gone or the lap
@@ -185,8 +220,29 @@ struct Session {
   /// Runs Update() on every source. Returns true if any rebuilt.
   bool Update();
 
+  //------------------------------ COMPARISONS ------------------------------//
+
+  Comparison *NewComparison();
+  Comparison *FindComparison(int comparison_id);
+  void RemoveComparison(int comparison_id);
+
+  /// Why `ref` cannot join `comparison`, or empty when it can. An empty
+  /// comparison takes any lap and adopts its source's track; after that
+  /// only laps from sources on that same track are meaningful, since
+  /// resampling them against different gates would produce a plausible
+  /// looking delta out of two unrelated circuits.
+  std::string WhyNotAddable(const Comparison &comparison, LapRef ref) const;
+
+  /// Adds `ref` to `comparison`, adopting its source's track if this is the
+  /// first lap. Returns false (and changes nothing) when WhyNotAddable
+  /// gives a reason. Adding a lap that is already there is a no-op.
+  bool AddLap(Comparison *comparison, LapRef ref);
+
+  void RemoveLap(Comparison *comparison, LapRef ref);
+
 private:
   int next_source_id_ = 1;
+  int next_comparison_id_ = 1;
 };
 
 } // namespace pacer

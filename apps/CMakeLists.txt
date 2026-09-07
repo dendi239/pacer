@@ -6,6 +6,7 @@ if(NOT SKBUILD)
             pacer::laps
             pacer::gps-source
             pacer::laps-display
+            pacer::comparison-view
             pacer::map-tiles
             pacer::session
             pacer::source-view

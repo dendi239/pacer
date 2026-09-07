@@ -88,6 +88,25 @@ void SourceView::DrawTrackPanel() {
   }
 }
 
+void SourceView::PlotTrackGates() const {
+  const ReferenceTrack &track = source->track;
+  ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 3.0f);
+  for (size_t i = 0; i < track.TimingLinesCount(); ++i) {
+    Segment seg = track.TimingLine(i);
+    auto a = track.cs.Global(Vec3f{seg.first.x, seg.first.y, 0});
+    auto b = track.cs.Global(Vec3f{seg.second.x, seg.second.y, 0});
+    Vec3f line[2] = {display.cs.Local(a), display.cs.Local(b)};
+    ImPlot::PlotLineG(
+        "",
+        [](int index, void *data) -> ImPlotPoint {
+          auto p = reinterpret_cast<Vec3f *>(data)[index];
+          return {p[0], p[1]};
+        },
+        line, 2);
+  }
+  ImPlot::PopStyleVar();
+}
+
 //------------------------------ FILES PANEL --------------------------------//
 
 namespace {
@@ -101,13 +120,6 @@ std::string FormatDuration(int64_t ms) {
 }
 
 } // namespace
-
-std::string FormatLapTime(double seconds) {
-  if (!(seconds > 0))
-    return "--";
-  int minutes = (int)(seconds / 60);
-  return std::format("{}:{:06.3f}", minutes, seconds - minutes * 60);
-}
 
 void SourceView::DrawFilesPanel() {
   ImGui::SetNextItemWidth(-90);

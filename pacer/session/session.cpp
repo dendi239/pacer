@@ -11,6 +11,13 @@ std::string LapRef::Label() const {
   return std::format("F{}L{}", source_id, lap_index);
 }
 
+std::string FormatLapTime(double seconds) {
+  if (!(seconds > 0))
+    return "--";
+  int minutes = (int)(seconds / 60);
+  return std::format("{}:{:06.3f}", minutes, seconds - minutes * 60);
+}
+
 //------------------------------- SourceFile --------------------------------//
 
 size_t SourceFile::BeginIndex() const {
@@ -317,6 +324,12 @@ void Session::Remove(int source_id) {
   std::erase_if(sources, [&](const std::unique_ptr<Source> &source) {
     return source->id == source_id;
   });
+  // A comparison holding laps of a source that is gone would keep drawing
+  // gaps where they used to be; drop them with the source.
+  for (auto &comparison : comparisons) {
+    std::erase_if(comparison->laps,
+                  [&](LapRef ref) { return ref.source_id == source_id; });
+  }
 }
 
 std::optional<Lap> Session::ResolveLap(LapRef ref) const {
@@ -326,6 +339,84 @@ std::optional<Lap> Session::ResolveLap(LapRef ref) const {
     return std::nullopt;
   }
   return source->laps.GetLap(ref.lap_index);
+}
+
+//------------------------------- COMPARISONS -------------------------------//
+
+int Comparison::IndexOf(LapRef ref) const {
+  for (size_t i = 0; i < laps.size(); ++i) {
+    if (laps[i] == ref)
+      return (int)i;
+  }
+  return -1;
+}
+
+Comparison *Session::NewComparison() {
+  auto comparison = std::make_unique<Comparison>();
+  comparison->id = next_comparison_id_++;
+  comparison->name = std::format("Comparison {}", comparison->id);
+  comparisons.push_back(std::move(comparison));
+  return comparisons.back().get();
+}
+
+Comparison *Session::FindComparison(int comparison_id) {
+  for (auto &comparison : comparisons) {
+    if (comparison->id == comparison_id)
+      return comparison.get();
+  }
+  return nullptr;
+}
+
+void Session::RemoveComparison(int comparison_id) {
+  std::erase_if(comparisons,
+                [&](const std::unique_ptr<Comparison> &comparison) {
+                  return comparison->id == comparison_id;
+                });
+}
+
+std::string Session::WhyNotAddable(const Comparison &comparison,
+                                   LapRef ref) const {
+  const Source *source = Find(ref.source_id);
+  if (!source)
+    return "that source is gone";
+  if (!source->HasTrack())
+    return std::format("{} has no reference track", source->name);
+  // The track mismatch is checked before the lap index because it is the
+  // answer that helps: a lap being dragged exists by construction, whereas
+  // "wrong track" is the refusal a user will actually hit.
+  if (comparison.HasTrack() && comparison.track_path != source->track_path) {
+    return std::format("{} is on a different track", source->name);
+  }
+  if (ref.lap_index < 0 ||
+      (size_t)ref.lap_index >= source->laps.LapsCount())
+    return "that lap no longer exists";
+  return {};
+}
+
+bool Session::AddLap(Comparison *comparison, LapRef ref) {
+  if (!comparison || !WhyNotAddable(*comparison, ref).empty())
+    return false;
+  if (comparison->Contains(ref))
+    return true;
+
+  if (!comparison->HasTrack()) {
+    const Source *source = Find(ref.source_id);
+    comparison->track = source->track;
+    comparison->track_path = source->track_path;
+  }
+  comparison->laps.push_back(ref);
+  return true;
+}
+
+void Session::RemoveLap(Comparison *comparison, LapRef ref) {
+  if (!comparison)
+    return;
+  std::erase(comparison->laps, ref);
+  // An emptied comparison is free to adopt a different track next time.
+  if (comparison->laps.empty()) {
+    comparison->track = ReferenceTrack{};
+    comparison->track_path.clear();
+  }
 }
 
 bool Session::Update() {

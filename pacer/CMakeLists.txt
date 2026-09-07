@@ -81,6 +81,7 @@ if(NOT EMSCRIPTEN)
     # Depends on gps-source (and so on the GPMF reader), hence desktop-only.
     add_subdirectory(session)
     add_subdirectory(source-view)
+    add_subdirectory(comparison-view)
 endif()
 if(NOT SKBUILD)
     # Needs CURL and a GL context; only the desktop apps use it.
