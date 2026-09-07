@@ -155,6 +155,80 @@ TEST_CASE("Files on the synthetic clock are chained, timestamped ones are not",
   }
 }
 
+TEST_CASE("Auto-trim drops the ends the receiver hadn't settled on",
+          "[session][trim]") {
+  pacer::Source source;
+
+  SECTION("bad accuracy at both ends") {
+    source.files.push_back(MakeFile("a.dat", 10, 0));
+    pacer::SourceFile &file = source.files[0];
+    for (auto &sample : file.samples)
+      sample.h_acc = 1.0;
+    file.samples[0].h_acc = 20.0;
+    file.samples[1].h_acc = 20.0;
+    file.samples[9].h_acc = 0.0; // reported nothing
+
+    REQUIRE(source.AutoTrim(0) == 3);
+    REQUIRE(file.trim_begin == 2);
+    REQUIRE(file.trim_end == 1);
+    REQUIRE(file.UsedCount() == 7);
+  }
+
+  SECTION("a stale fix, held while the receiver re-acquires") {
+    // No h_acc anywhere, as GPMF gives -- so only the repeated position
+    // gives the stale head away.
+    source.files.push_back(MakeFile("clip.MP4", 10, 0));
+    pacer::SourceFile &file = source.files[0];
+    for (size_t i = 1; i < 4; ++i)
+      file.samples[i].lon = file.samples[0].lon;
+
+    REQUIRE(source.AutoTrim(0) == 4);
+    REQUIRE(file.trim_begin == 4);
+    REQUIRE(file.trim_end == 0);
+  }
+
+  SECTION("a file that is bad throughout is left for the user to judge") {
+    source.files.push_back(MakeFile("bad.dat", 10, 0));
+    for (auto &sample : source.files[0].samples)
+      sample.h_acc = 50.0;
+
+    REQUIRE(source.AutoTrim(0) == 0);
+    REQUIRE(source.files[0].UsedCount() == 10);
+  }
+
+  SECTION("never widens a trim the user already made") {
+    source.files.push_back(MakeFile("a.dat", 10, 0));
+    pacer::SourceFile &file = source.files[0];
+    for (auto &sample : file.samples)
+      sample.h_acc = 1.0;
+    file.trim_begin = 5;
+
+    REQUIRE(source.AutoTrim(0) == 0);
+    REQUIRE(file.trim_begin == 5);
+  }
+}
+
+TEST_CASE("The plot domain ignores trims so handles stay put",
+          "[session][trim]") {
+  pacer::Source source;
+  source.files.push_back(MakeFile("a.dat", 10, 1000));
+  source.MarkDirty();
+  source.Update();
+
+  auto [full_begin, full_end] = source.FullTimestampSpanMs();
+  REQUIRE(full_begin == 1000);
+  REQUIRE(full_end == 1360);
+
+  source.files[0].trim_begin = 4;
+  source.MarkDirty();
+  source.Update();
+
+  REQUIRE(source.TimestampSpanMs().first == 1160);
+  // The domain a trimming view draws is unchanged by the trim itself.
+  REQUIRE(source.FullTimestampSpanMs() ==
+          std::pair<int64_t, int64_t>{1000, 1360});
+}
+
 TEST_CASE("Sources are addressed by id, not position", "[session][lapref]") {
   pacer::Session session;
   pacer::Source *first = session.NewSource();

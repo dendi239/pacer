@@ -63,8 +63,8 @@ struct PanelSpec {
 
 constexpr PanelSpec kSourcePanels[] = {
     {"Track", "TrackSpace"},     {"Files", "FilesSpace"},
-    {"Map", "MainDockSpace"},    {"Lap chart", "DataSpace"},
-    {"Lap table", "TableSpace"},
+    {"Map", "MainDockSpace"},    {"Samples", "MainDockSpace"},
+    {"Lap chart", "DataSpace"},  {"Lap table", "TableSpace"},
 };
 
 // A window's ImGui identity: everything after "###". Stays put while the
@@ -219,9 +219,12 @@ struct TimelineApp {
       DrawMapPanel(*view);
       break;
     case 3:
-      view->DrawLapChartPanel();
+      view->DrawSamplesPanel();
       break;
     case 4:
+      view->DrawLapChartPanel();
+      break;
+    case 5:
       view->DrawLapTablePanel();
       break;
     }

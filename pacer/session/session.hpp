@@ -58,6 +58,16 @@ struct SourceFile {
   size_t EndIndex() const;
   size_t UsedCount() const;
 
+  /// True when the receiver reported a horizontal accuracy for any sample.
+  /// GPMF carries none, so a zero h_acc means "not reported" there and
+  /// "impossibly good" nowhere.
+  bool ReportsAccuracy() const;
+
+  /// Index of the first sample at or after `timestamp_ms` (in the file's own
+  /// clock), clamped to [0, samples.size()]. Samples are in time order, so
+  /// this is what maps a dragged handle back onto a trim window.
+  size_t IndexAtTimestamp(int64_t timestamp_ms) const;
+
   /// Timestamps of the first/last untrimmed sample, in ms. Zero when the
   /// trimmed window is empty. These are the file's own timestamps, before
   /// Rebuild() applies any cross-file offset.
@@ -128,6 +138,18 @@ struct Source {
 
   /// Wall-clock span of the concatenated stream, in ms. {0, 0} when empty.
   std::pair<int64_t, int64_t> TimestampSpanMs() const;
+
+  /// The same span over the files' whole sample ranges, ignoring trims. This
+  /// is the domain a trimming view should draw: it doesn't move under the
+  /// handles as they are dragged.
+  std::pair<int64_t, int64_t> FullTimestampSpanMs() const;
+
+  /// Trims off the ends of `files[index]` the samples the receiver hadn't
+  /// settled on: fixes worse than `max_h_acc` metres, ones it reported no
+  /// accuracy for, and repeats of one position (a stale fix held while it
+  /// re-acquires). Leaves the file alone if that would trim everything.
+  /// Returns the number of samples newly trimmed.
+  size_t AutoTrim(size_t index, double max_h_acc = 5.0);
 
   /// Offset added to `files[index]`'s own timestamps when it is concatenated,
   /// in ms. Zero unless the file relies on the synthetic clock.

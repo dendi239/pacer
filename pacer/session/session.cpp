@@ -32,6 +32,22 @@ int64_t SourceFile::LastTimestampMs() const {
   return UsedCount() ? samples[EndIndex() - 1].timestamp_ms : 0;
 }
 
+bool SourceFile::ReportsAccuracy() const {
+  for (const GPSSample &sample : samples) {
+    if (sample.h_acc > 0)
+      return true;
+  }
+  return false;
+}
+
+size_t SourceFile::IndexAtTimestamp(int64_t timestamp_ms) const {
+  auto it = std::lower_bound(samples.begin(), samples.end(), timestamp_ms,
+                             [](const GPSSample &sample, int64_t target) {
+                               return sample.timestamp_ms < target;
+                             });
+  return (size_t)(it - samples.begin());
+}
+
 //---------------------------------- Source ---------------------------------//
 
 bool Source::AddFile(const std::string &path, std::string *error) {
@@ -171,6 +187,84 @@ std::pair<int64_t, int64_t> Source::TimestampSpanMs() const {
     }
   }
   return {first, last};
+}
+
+std::pair<int64_t, int64_t> Source::FullTimestampSpanMs() const {
+  bool any = false;
+  int64_t first = 0, last = 0;
+  for (size_t i = 0; i < files.size(); ++i) {
+    const SourceFile &file = files[i];
+    if (!file.enabled || file.samples.empty())
+      continue;
+    int64_t offset = FileOffsetMs(i);
+    int64_t file_first = file.samples.front().timestamp_ms + offset;
+    int64_t file_last = file.samples.back().timestamp_ms + offset;
+    if (!any) {
+      first = file_first;
+      last = file_last;
+      any = true;
+    } else {
+      first = std::min(first, file_first);
+      last = std::max(last, file_last);
+    }
+  }
+  return {first, last};
+}
+
+size_t Source::AutoTrim(size_t index, double max_h_acc) {
+  if (index >= files.size())
+    return 0;
+  SourceFile &file = files[index];
+  const size_t count = file.samples.size();
+  if (count == 0)
+    return 0;
+
+  const bool reports_accuracy = file.ReportsAccuracy();
+  auto settled = [&](size_t i) {
+    const GPSSample &sample = file.samples[i];
+    if (reports_accuracy && (sample.h_acc <= 0 || sample.h_acc > max_h_acc))
+      return false;
+    // A receiver that has lost the fix keeps handing back the last one it
+    // had, so the position stops moving *exactly* -- not merely slowly, as a
+    // stationary car on a noisy fix would. Every sample in such a run is
+    // stale, including the one that starts it, so both neighbours count.
+    auto same_position = [&](size_t a, size_t b) {
+      return file.samples[a].lat == file.samples[b].lat &&
+             file.samples[a].lon == file.samples[b].lon;
+    };
+    if (i > 0 && same_position(i, i - 1))
+      return false;
+    if (i + 1 < count && same_position(i, i + 1))
+      return false;
+    return true;
+  };
+
+  size_t begin = 0;
+  while (begin < count && !settled(begin))
+    ++begin;
+  if (begin == count) {
+    // Nothing in the file passes; that is a judgement for the user to make,
+    // not something to silently delete the recording over.
+    return 0;
+  }
+
+  size_t end = count;
+  while (end > begin + 1 && !settled(end - 1))
+    --end;
+
+  size_t trimmed = 0;
+  if (begin > file.trim_begin) {
+    trimmed += begin - file.trim_begin;
+    file.trim_begin = begin;
+  }
+  size_t trim_end = count - end;
+  if (trim_end > file.trim_end) {
+    trimmed += trim_end - file.trim_end;
+    file.trim_end = trim_end;
+  }
+  if (trimmed > 0)
+    dirty_ = true;
+  return trimmed;
 }
 
 int64_t Source::FileOffsetMs(size_t index) const {

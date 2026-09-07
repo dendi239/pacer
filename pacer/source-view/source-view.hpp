@@ -42,12 +42,22 @@ struct SourceView {
   /// Lap and sector times.
   void DrawLapTablePanel();
 
+  /// The source's samples laid out on its own clock: speed and fix accuracy
+  /// over one shared time axis, the files that make it up as labelled bands,
+  /// and draggable handles for each file's trim window. This is where a
+  /// stale head, a dropout, or a clip boundary landing mid-lap is visible.
+  void DrawSamplesPanel();
+
   /// Adopts the source's track: its coordinate system becomes the map frame.
   /// The constructor does this already; call it again after loading a track
   /// into the source from outside this view (e.g. from the command line).
   void AdoptTrack();
 
 private:
+  /// The per-file head/tail handles on the samples plot. `origin_s` is the
+  /// source's first sample time, i.e. what the plot's x axis counts from.
+  void DrawTrimHandles(double origin_s);
+
   TrackFilePicker track_picker_;
   std::string track_status_;
 

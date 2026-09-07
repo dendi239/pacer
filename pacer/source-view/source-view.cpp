@@ -1,9 +1,12 @@
 #include "source-view.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <limits>
+#include <vector>
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -172,6 +175,30 @@ void SourceView::DrawFilesPanel() {
                     FormatDuration(file.LastTimestampMs() -
                                    file.FirstTimestampMs())
                         .c_str());
+
+        if (ImGui::SmallButton("Auto-trim")) {
+          size_t trimmed = source->AutoTrim(i);
+          files_status_ =
+              trimmed ? std::format("Auto-trim dropped {} samples from {}.",
+                                    trimmed,
+                                    std::filesystem::path(file.path)
+                                        .filename()
+                                        .string())
+                      : "Auto-trim found nothing to drop.";
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
+          ImGui::SetTooltip(
+              "Drops samples off each end that the receiver hadn't settled "
+              "on:\nfixes worse than 5 m, ones with no reported accuracy, "
+              "and\nrepeats of a single stale position.");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset trim")) {
+          file.trim_begin = 0;
+          file.trim_end = 0;
+          source->MarkDirty();
+        }
+        ImGui::SameLine();
       }
 
       if (ImGui::SmallButton("Reload")) {
@@ -261,5 +288,265 @@ void SourceView::DrawLapChartPanel() {
 //---------------------------- LAP TABLE PANEL ------------------------------//
 
 void SourceView::DrawLapTablePanel() { display.DisplayTable(); }
+
+//----------------------------- SAMPLES PANEL -------------------------------//
+
+namespace {
+
+// Points to plot for one file, in seconds since the source's start.
+struct Trace {
+  std::vector<double> t;
+  std::vector<double> value;
+
+  void Clear() {
+    t.clear();
+    value.clear();
+  }
+  void Add(double time, double v) {
+    t.push_back(time);
+    value.push_back(v);
+  }
+  int Count() const { return (int)t.size(); }
+};
+
+// Fills `out` with `samples[begin, end)` reduced to at most 2*`buckets`
+// points: per bucket, its lowest and highest value, in the order they occur.
+// Striding would drop a one-sample accuracy spike, which is exactly what
+// this view exists to show; a min/max envelope keeps it.
+void BuildEnvelope(const std::vector<pacer::GPSSample> &samples, size_t begin,
+                   size_t end, bool speed, double offset_s, int buckets,
+                   Trace *out) {
+  out->Clear();
+  if (begin >= end)
+    return;
+
+  auto value_of = [&](const pacer::GPSSample &sample) {
+    return speed ? sample.full_speed * 3.6 : sample.h_acc;
+  };
+  auto time_of = [&](const pacer::GPSSample &sample) {
+    return sample.timestamp_ms / 1000.0 + offset_s;
+  };
+
+  const size_t count = end - begin;
+  if (count <= (size_t)buckets * 2) {
+    out->t.reserve(count);
+    out->value.reserve(count);
+    for (size_t i = begin; i < end; ++i) {
+      out->Add(time_of(samples[i]), value_of(samples[i]));
+    }
+    return;
+  }
+
+  out->t.reserve(buckets * 2);
+  out->value.reserve(buckets * 2);
+  for (int b = 0; b < buckets; ++b) {
+    size_t from = begin + count * b / buckets;
+    size_t to = begin + count * (b + 1) / buckets;
+    if (from >= to)
+      continue;
+    size_t lo = from, hi = from;
+    for (size_t i = from + 1; i < to; ++i) {
+      if (value_of(samples[i]) < value_of(samples[lo]))
+        lo = i;
+      if (value_of(samples[i]) > value_of(samples[hi]))
+        hi = i;
+    }
+    size_t first = std::min(lo, hi), second = std::max(lo, hi);
+    out->Add(time_of(samples[first]), value_of(samples[first]));
+    if (second != first)
+      out->Add(time_of(samples[second]), value_of(samples[second]));
+  }
+}
+
+} // namespace
+
+void SourceView::DrawSamplesPanel() {
+  auto [span_begin_ms, span_end_ms] = source->FullTimestampSpanMs();
+  if (span_end_ms <= span_begin_ms) {
+    ImGui::TextWrapped("Add a file to see its samples.");
+    return;
+  }
+  const double origin_s = span_begin_ms / 1000.0;
+  const double span_s = (span_end_ms - span_begin_ms) / 1000.0;
+
+  // Seconds on the plot's axis for a timestamp in `file_index`'s own clock.
+  auto file_offset_s = [&](size_t file_index) {
+    return source->FileOffsetMs(file_index) / 1000.0 - origin_s;
+  };
+
+  ImGui::TextDisabled("Drag a handle to trim that file. Trimmed samples stay "
+                      "on the plot, greyed out.");
+
+  // Speed and fix accuracy are different quantities on different scales, so
+  // they get a subplot each over one shared time axis -- never two y-scales
+  // on one plot.
+  constexpr int kRows = 2;
+  if (!ImPlot::BeginSubplots("##samples", kRows, 1, ImVec2(-1, -1),
+                             ImPlotSubplotFlags_LinkAllX)) {
+    return;
+  }
+
+  Trace kept, dropped;
+  for (int row = 0; row < kRows; ++row) {
+    const bool speed_row = row == 0;
+    if (!ImPlot::BeginPlot("##samples_row", ImVec2(-1, -1),
+                           ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
+      continue;
+    }
+    ImPlot::SetupAxes(speed_row ? nullptr : "Time (s)",
+                      speed_row ? "Speed (km/h)" : "Fix accuracy (m)", 0,
+                      ImPlotAxisFlags_AutoFit);
+    ImPlot::SetupAxisLimits(ImAxis_X1, 0, span_s, ImPlotCond_Once);
+    ImPlot::SetupFinish();
+
+    const ImPlotRect limits = ImPlot::GetPlotLimits();
+    // One bucket per pixel column: finer than that is invisible, coarser
+    // throws away detail the user zoomed in to see.
+    const int buckets =
+        std::clamp((int)ImPlot::GetPlotSize().x, 64, 4096);
+
+    // File bands are background context, so they go straight to the draw
+    // list: neutral tints that name their file and stay out of the axis fit.
+    ImPlot::PushPlotClipRect();
+    ImDrawList *draw = ImPlot::GetPlotDrawList();
+    const ImVec4 muted = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    for (size_t i = 0; i < source->files.size(); ++i) {
+      const SourceFile &file = source->files[i];
+      if (file.samples.empty())
+        continue;
+      double from = file.samples.front().timestamp_ms / 1000.0 +
+                    file_offset_s(i);
+      double to =
+          file.samples.back().timestamp_ms / 1000.0 + file_offset_s(i);
+      ImVec2 top_left = ImPlot::PlotToPixels(from, limits.Y.Max);
+      ImVec2 bottom_right = ImPlot::PlotToPixels(to, limits.Y.Min);
+      draw->AddRectFilled(top_left, bottom_right,
+                          ImGui::GetColorU32(ImVec4(muted.x, muted.y, muted.z,
+                                                    (i % 2) ? 0.12f : 0.05f)));
+      if (speed_row) {
+        std::string name = std::filesystem::path(file.path).filename().string();
+        if (!file.enabled)
+          name += " (off)";
+        draw->AddText(ImVec2(top_left.x + 4, top_left.y + 4),
+                      ImGui::GetColorU32(ImGuiCol_TextDisabled), name.c_str());
+      }
+    }
+    ImPlot::PopPlotClipRect();
+
+    for (size_t i = 0; i < source->files.size(); ++i) {
+      const SourceFile &file = source->files[i];
+      if (file.samples.empty() || !file.enabled)
+        continue;
+      const double offset_s = file_offset_s(i);
+      // Only envelope what is on screen, so zooming in resolves more of it.
+      const int64_t from_ms =
+          (int64_t)((limits.X.Min - offset_s) * 1000);
+      const int64_t to_ms = (int64_t)((limits.X.Max - offset_s) * 1000);
+      const size_t view_begin = file.IndexAtTimestamp(from_ms);
+      const size_t view_end =
+          std::min(file.IndexAtTimestamp(to_ms) + 1, file.samples.size());
+
+      // The kept window and the trimmed ends are drawn separately, so what
+      // is included reads as the solid trace and what is not stays behind it.
+      const size_t keep_begin = std::max(view_begin, file.BeginIndex());
+      const size_t keep_end = std::min(view_end, file.EndIndex());
+
+      ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(muted.x, muted.y, muted.z,
+                                                    0.55f));
+      ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 1.0f);
+      BuildEnvelope(file.samples, view_begin,
+                    std::min(view_end, file.BeginIndex()), speed_row, offset_s,
+                    buckets, &dropped);
+      ImPlot::PlotLine("Trimmed", dropped.t.data(), dropped.value.data(),
+                       dropped.Count());
+      BuildEnvelope(file.samples, std::max(view_begin, file.EndIndex()),
+                    view_end, speed_row, offset_s, buckets, &dropped);
+      ImPlot::PlotLine("Trimmed", dropped.t.data(), dropped.value.data(),
+                       dropped.Count());
+      ImPlot::PopStyleVar();
+      ImPlot::PopStyleColor();
+
+      ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 2.0f);
+      BuildEnvelope(file.samples, keep_begin, keep_end, speed_row, offset_s,
+                    buckets, &kept);
+      ImPlot::PlotLine("Samples", kept.t.data(), kept.value.data(),
+                       kept.Count());
+      ImPlot::PopStyleVar();
+    }
+
+    // Lap starts, so a clip boundary or a dropout landing mid-lap is visible
+    // against the trace. Vertical infinite lines take no part in the y fit.
+    // A full session is a hundred-odd laps, which at that zoom reads as
+    // hatching rather than as marks, so they appear once zoomed in enough to
+    // tell them apart.
+    constexpr int kMaxVisibleLapLines = 60;
+    const Laps &laps = source->laps;
+    std::vector<double> lap_starts;
+    for (size_t lap = 0; lap < laps.LapsCount(); ++lap) {
+      double at = laps.StartTimestamp(lap) - origin_s;
+      if (at >= limits.X.Min && at <= limits.X.Max) {
+        lap_starts.push_back(at);
+        if ((int)lap_starts.size() > kMaxVisibleLapLines)
+          break;
+      }
+    }
+    if (!lap_starts.empty() &&
+        (int)lap_starts.size() <= kMaxVisibleLapLines) {
+      ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 1.0f);
+      ImPlot::PushStyleColor(ImPlotCol_Line,
+                             ImVec4(muted.x, muted.y, muted.z, 0.35f));
+      ImPlot::PlotInfLines("Lap start", lap_starts.data(),
+                           (int)lap_starts.size());
+      ImPlot::PopStyleColor();
+      ImPlot::PopStyleVar();
+    }
+
+    // The trim handles live on the speed row only: two per file is already
+    // enough furniture without repeating them underneath.
+    if (speed_row) {
+      DrawTrimHandles(origin_s);
+    }
+
+    ImPlot::EndPlot();
+  }
+
+  ImPlot::EndSubplots();
+}
+
+void SourceView::DrawTrimHandles(double origin_s) {
+  const ImVec4 handle_color = ImGui::GetStyleColorVec4(ImGuiCol_SliderGrab);
+
+  for (size_t i = 0; i < source->files.size(); ++i) {
+    SourceFile &file = source->files[i];
+    if (file.samples.empty() || !file.enabled)
+      continue;
+    const double offset_s = source->FileOffsetMs(i) / 1000.0 - origin_s;
+    auto to_index = [&](double plot_s) {
+      int64_t target = (int64_t)((plot_s - offset_s) * 1000);
+      return std::min(file.IndexAtTimestamp(target), file.samples.size() - 1);
+    };
+
+    double head = file.samples[file.BeginIndex()].timestamp_ms / 1000.0 +
+                  offset_s;
+    double tail = file.samples[file.EndIndex() - 1].timestamp_ms / 1000.0 +
+                  offset_s;
+
+    // Two ids per file, distinct from every other file's.
+    if (ImPlot::DragLineX((int)i * 2, &head, handle_color, 2.0f)) {
+      size_t index = to_index(head);
+      file.trim_begin = index;
+      // Keep at least one sample: the tail handle must stay ahead of this.
+      file.trim_end =
+          std::min(file.trim_end, file.samples.size() - index - 1);
+      source->MarkDirty();
+    }
+    if (ImPlot::DragLineX((int)i * 2 + 1, &tail, handle_color, 2.0f)) {
+      size_t index = to_index(tail);
+      file.trim_end = file.samples.size() - index - 1;
+      file.trim_begin = std::min(file.trim_begin, index);
+      source->MarkDirty();
+    }
+  }
+}
 
 } // namespace pacer
