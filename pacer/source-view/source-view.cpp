@@ -102,6 +102,13 @@ std::string FormatDuration(int64_t ms) {
 
 } // namespace
 
+std::string FormatLapTime(double seconds) {
+  if (!(seconds > 0))
+    return "--";
+  int minutes = (int)(seconds / 60);
+  return std::format("{}:{:06.3f}", minutes, seconds - minutes * 60);
+}
+
 void SourceView::DrawFilesPanel() {
   ImGui::SetNextItemWidth(-90);
   bool submitted = ImGui::InputTextWithHint(
@@ -241,6 +248,11 @@ void SourceView::DrawFilesPanel() {
 
 //---------------------------- LAP CHART PANEL ------------------------------//
 
+// How near the cursor has to be to a lap's marker to count as pointing at
+// it, in pixels. Also the half-size of the drag handle placed over it.
+constexpr float kHoverRadiusPx = 10.0f;
+
+
 void SourceView::DrawLapChartPanel() {
   Laps &laps = source->laps;
 
@@ -282,12 +294,234 @@ void SourceView::DrawLapChartPanel() {
 
   ImPlot::PlotLineG("Lap time", getter, &data, (int)laps.LapsCount());
   ImPlot::PlotScatterG("Lap time", getter, &data, (int)laps.LapsCount());
+
+  // Nearest plotted lap to the cursor, if it is close enough to have been
+  // aimed at. Laps the cutoff hid are NaN and can't be hit.
+  int hovered = -1;
+  ImVec2 hovered_pixels;
+  if (ImPlot::IsPlotHovered()) {
+    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+    int candidate = (int)std::lround(mouse.x);
+    if (candidate >= 0 && candidate < (int)laps.LapsCount()) {
+      ImPlotPoint point = getter(candidate, &data);
+      if (!std::isnan(point.y)) {
+        ImVec2 pixels = ImPlot::PlotToPixels(point);
+        ImVec2 mouse = ImGui::GetMousePos();
+        float dx = pixels.x - mouse.x, dy = pixels.y - mouse.y;
+        if (dx * dx + dy * dy < kHoverRadiusPx * kHoverRadiusPx) {
+          hovered = candidate;
+          hovered_pixels = pixels;
+        }
+      }
+    }
+  }
+
   ImPlot::EndPlot();
+
+  // The drag source is an invisible button over the hovered point, placed
+  // after EndPlot so it takes the mouse ahead of the plot's own pan/zoom.
+  if (hovered >= 0) {
+    ImGui::SetCursorScreenPos(ImVec2(hovered_pixels.x - kHoverRadiusPx,
+                                     hovered_pixels.y - kHoverRadiusPx));
+    ImGui::InvisibleButton("##lap_drag",
+                           ImVec2(kHoverRadiusPx * 2, kHoverRadiusPx * 2));
+    LapDragSource(hovered);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Lap %d\n%s\nDrag onto a comparison", hovered,
+                        FormatLapTime(laps.LapTime(hovered)).c_str());
+    }
+  }
+}
+
+void SourceView::LapDragSource(int lap) {
+  if (!ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+    return;
+  LapRef ref{.source_id = source->id, .lap_index = lap};
+  ImGui::SetDragDropPayload(kLapDragPayload, &ref, sizeof(ref));
+  ImGui::Text("%s  %s", ref.Label().c_str(),
+              FormatLapTime(source->laps.LapTime(lap)).c_str());
+  ImGui::EndDragDropSource();
 }
 
 //---------------------------- LAP TABLE PANEL ------------------------------//
 
-void SourceView::DrawLapTablePanel() { display.DisplayTable(); }
+namespace {
+
+// Column ids, so sorting reads by meaning rather than by position (the
+// sector columns' count depends on the track).
+enum LapColumn : ImGuiID {
+  kColLap = 0,
+  kColTime,
+  kColDistance,
+  kColSamples,
+  kColSector, // ..kColSector + sector index
+};
+
+} // namespace
+
+void SourceView::DrawLapTablePanel() {
+  Laps &laps = source->laps;
+  const int lap_count = (int)laps.LapsCount();
+  if (lap_count == 0) {
+    ImGui::TextWrapped(source->UsedSampleCount() == 0
+                           ? "No samples loaded."
+                           : "No laps: load a reference track whose "
+                             "start/finish line this data crosses.");
+    return;
+  }
+
+  // Each lap contributes one chunk per timing line -- the start/finish line
+  // plus every sector split -- so lap `l`'s sector `s` is chunk
+  // l * sectors_per_lap + s.
+  const int sectors_per_lap = 1 + (int)laps.SectorCount();
+  const int recorded_sectors = (int)laps.RecordedSectors();
+  auto sector_time = [&](int lap, int sector) -> double {
+    int index = lap * sectors_per_lap + sector;
+    return index < recorded_sectors ? laps.SectorTime(index) : 0.0;
+  };
+
+  const int columns = 4 + sectors_per_lap;
+  const ImGuiTableFlags flags =
+      ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+      ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
+      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Reorderable |
+      ImGuiTableFlags_Hideable;
+
+  // Room for the summary line below the table.
+  ImVec2 size(0, ImGui::GetContentRegionAvail().y -
+                     ImGui::GetTextLineHeightWithSpacing() * 3);
+  if (!ImGui::BeginTable("laps", columns, flags, size))
+    return;
+
+  ImGui::TableSetupScrollFreeze(1, 1);
+  ImGui::TableSetupColumn("Lap",
+                          ImGuiTableColumnFlags_DefaultSort |
+                              ImGuiTableColumnFlags_WidthFixed |
+                              ImGuiTableColumnFlags_NoHide,
+                          52.0f, kColLap);
+  ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_PreferSortAscending, 0,
+                          kColTime);
+  for (int s = 0; s < sectors_per_lap; ++s) {
+    ImGui::TableSetupColumn(std::format("S{}", s + 1).c_str(),
+                            ImGuiTableColumnFlags_PreferSortAscending, 0,
+                            kColSector + s);
+  }
+  ImGui::TableSetupColumn("Distance", ImGuiTableColumnFlags_DefaultHide, 0,
+                          kColDistance);
+  ImGui::TableSetupColumn("Samples", ImGuiTableColumnFlags_DefaultHide, 0,
+                          kColSamples);
+  ImGui::TableHeadersRow();
+
+  // Sorted every frame rather than cached: a session is a few hundred laps,
+  // and any retrim silently changes every time in the table.
+  lap_order_.resize(lap_count);
+  for (int i = 0; i < lap_count; ++i)
+    lap_order_[i] = i;
+
+  if (ImGuiTableSortSpecs *specs = ImGui::TableGetSortSpecs();
+      specs && specs->SpecsCount > 0) {
+    const ImGuiTableColumnSortSpecs &spec = specs->Specs[0];
+    auto key = [&](int lap) -> double {
+      switch (spec.ColumnUserID) {
+      case kColTime:
+        return laps.LapTime(lap);
+      case kColDistance:
+        return laps.GetLapDistance(lap, display.cs);
+      case kColSamples:
+        return (double)laps.SampleCount(lap);
+      case kColLap:
+        return lap;
+      default:
+        return sector_time(lap, (int)(spec.ColumnUserID - kColSector));
+      }
+    };
+    const bool ascending = spec.SortDirection == ImGuiSortDirection_Ascending;
+    std::stable_sort(lap_order_.begin(), lap_order_.end(),
+                     [&](int a, int b) {
+                       double ka = key(a), kb = key(b);
+                       // A lap that never recorded a time sorts last either
+                       // way; it is missing data, not a fast lap.
+                       if ((ka > 0) != (kb > 0))
+                         return ka > 0;
+                       return ascending ? ka < kb : kb < ka;
+                     });
+  }
+
+  for (int lap : lap_order_) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::PushID(lap);
+
+    const bool selected = lap == display.selected_lap;
+    if (ImGui::Selectable(std::format("{}", lap).c_str(), selected,
+                          ImGuiSelectableFlags_SpanAllColumns |
+                              ImGuiSelectableFlags_AllowOverlap)) {
+      display.selected_lap = selected ? -1 : lap;
+    }
+    LapDragSource(lap);
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextUnformatted(FormatLapTime(laps.LapTime(lap)).c_str());
+
+    for (int s = 0; s < sectors_per_lap; ++s) {
+      ImGui::TableSetColumnIndex(2 + s);
+      double time = sector_time(lap, s);
+      if (time > 0) {
+        ImGui::Text("%.3f", time);
+      } else {
+        ImGui::TextDisabled("--");
+      }
+    }
+
+    ImGui::TableSetColumnIndex(2 + sectors_per_lap);
+    ImGui::Text("%.0f m", laps.GetLapDistance(lap, display.cs));
+    ImGui::TableSetColumnIndex(3 + sectors_per_lap);
+    ImGui::Text("%zu", laps.SampleCount(lap));
+
+    ImGui::PopID();
+  }
+
+  ImGui::EndTable();
+
+  // Session best and theoretical best: what the colour-coding on a timing
+  // screen is really telling you, spelled out once instead of per cell.
+  int best_lap = -1;
+  double best_time = 0;
+  for (int lap = 0; lap < lap_count; ++lap) {
+    double time = laps.LapTime(lap);
+    if (time > 0 && (best_lap < 0 || time < best_time)) {
+      best_lap = lap;
+      best_time = time;
+    }
+  }
+
+  std::string summary = "No completed laps.";
+  if (best_lap >= 0) {
+    double theoretical = 0;
+    std::string sectors;
+    for (int s = 0; s < sectors_per_lap; ++s) {
+      double best_sector = 0;
+      for (int lap = 0; lap < lap_count; ++lap) {
+        double time = sector_time(lap, s);
+        if (time > 0 && (best_sector == 0 || time < best_sector))
+          best_sector = time;
+      }
+      theoretical += best_sector;
+      sectors += std::format("{}S{} {:.3f}", s ? " · " : "", s + 1,
+                             best_sector);
+    }
+    summary = std::format("Best {} (lap {})", FormatLapTime(best_time),
+                          best_lap);
+    if (theoretical > 0) {
+      summary += std::format("   ·   theoretical {}  ({})",
+                             FormatLapTime(theoretical), sectors);
+    }
+  }
+  ImGui::PushStyleColor(ImGuiCol_Text,
+                        ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("%s", summary.c_str());
+  ImGui::PopStyleColor();
+}
 
 //----------------------------- SAMPLES PANEL -------------------------------//
 

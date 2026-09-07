@@ -164,66 +164,6 @@ void pacer::LapsDisplay::DisplayLapTelemetry() const {
     ImPlot::EndPlot();
   }
 }
-bool pacer::LapsDisplay::DisplayTable() {
-  size_t sector_count = 1 + laps->SectorCount();
-  if (!ImGui::BeginTable("Laps", 4 + 2 * (int)sector_count,
-                         ImGuiTableFlags_RowBg |
-                             ImGuiTableFlags_BordersInnerV)) {
-    return false;
-  }
-
-  ImGui::TableSetupColumn("start");
-  ImGui::TableSetupColumn("points");
-  ImGui::TableSetupColumn("distance");
-  ImGui::TableSetupColumn("laptime");
-  for (size_t i = 0; i < sector_count; ++i) {
-    std::stringstream ss;
-    ss << "S" << i + 1;
-    ImGui::TableSetupColumn("");
-    ImGui::TableSetupColumn(ss.str().c_str());
-  }
-  ImGui::TableHeadersRow();
-
-  for (int row = 0, i_sector = 0; row < laps->LapsCount(); ++row) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-
-    ImGui::Selectable(std::format("{}", row).c_str(), false, 0, ImVec2(100, 0));
-
-    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-      ImGui::SetDragDropPayload("MY_DND", &row, sizeof(int));
-      ImGui::Text("%.3f", laps->StartTimestamp(row));
-      ImGui::EndDragDropSource();
-    }
-
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%zu", laps->SampleCount(row));
-
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%.2f", laps->GetLapDistance(row, cs));
-
-    ImGui::TableSetColumnIndex(3);
-    if (ImGui::Button(std::format("{:.3f}", laps->LapTime(row)).c_str())) {
-      selected_lap = row == selected_lap ? -1 : row;
-    }
-
-    for (int i = 0; i < sector_count; ++i, ++i_sector) {
-      ImGui::TableSetColumnIndex(4 + 2 * i);
-      if (i_sector < laps->RecordedSectors()) {
-
-        ImGui::Text("%.3fkph", laps->SectorEntrySpeed(i_sector) * 3.6);
-      }
-      ImGui::TableSetColumnIndex(5 + 2 * i);
-
-      if (i_sector < laps->RecordedSectors()) {
-        ImGui::Text("%.3fs", laps->SectorTime(i_sector));
-      }
-    }
-  }
-
-  ImGui::EndTable();
-  return true;
-}
 ImPlotPoint Vec3fToPoint(int index, void *data) {
   auto s = reinterpret_cast<pacer::Vec3f *>(data)[index];
   return {s[0], s[1]};

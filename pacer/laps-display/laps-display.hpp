@@ -54,8 +54,6 @@ struct LapsDisplay {
   void PlotMapItems();
 
   void DisplayLapTelemetry() const;
-
-  bool DisplayTable();
 };
 
 struct DeltaLapsComparision {

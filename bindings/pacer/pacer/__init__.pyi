@@ -569,9 +569,6 @@ class LapsDisplay:
     def display_lap_telemetry(self) -> None:
         pass
 
-    def display_table(self) -> bool:
-        pass
-
     def __init__(
         self,
         selected_lap: int = -1,

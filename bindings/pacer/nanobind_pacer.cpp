@@ -478,8 +478,7 @@ void py_init_module_pacer(nb::module_ &m) {
                "/ Plots the GPS trace plus the start/sector timing lines "
                "(read-only;\n/ edit the geometry in track_annotator).")
           .def("display_lap_telemetry",
-               &pacer::LapsDisplay::DisplayLapTelemetry)
-          .def("display_table", &pacer::LapsDisplay::DisplayTable);
+               &pacer::LapsDisplay::DisplayLapTelemetry);
 
   auto pyClassDeltaLapsComparision =
       nb::class_<pacer::DeltaLapsComparision>(m, "DeltaLapsComparision", "")

@@ -1,12 +1,22 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <pacer/laps-display/laps-display.hpp>
 #include <pacer/session/session.hpp>
 #include <pacer/ui/track-picker.hpp>
 
 namespace pacer {
+
+/// ImGui drag-and-drop payload type for a lap: the payload itself is a
+/// LapRef. Dragged from a source's lap chart or lap table, dropped on a
+/// comparison.
+inline constexpr const char *kLapDragPayload = "PACER_LAP";
+
+/// Formats a lap time the way a timing screen does: "1:07.104". Sector
+/// times are short enough to read as plain seconds, so they don't use this.
+std::string FormatLapTime(double seconds);
 
 /// The UI over one Source: the panels the user sets a recording up with.
 /// Each panel draws its own contents only -- the app owns the windows they
@@ -57,6 +67,14 @@ private:
   /// The per-file head/tail handles on the samples plot. `origin_s` is the
   /// source's first sample time, i.e. what the plot's x axis counts from.
   void DrawTrimHandles(double origin_s);
+
+  /// Makes the item just submitted a drag source carrying `lap`.
+  void LapDragSource(int lap);
+
+  /// Order rows are drawn in, per the table's current sort. Rebuilt every
+  /// frame: a session is a few hundred laps, and caching it would need
+  /// invalidating on every retrim.
+  std::vector<int> lap_order_;
 
   TrackFilePicker track_picker_;
   std::string track_status_;
