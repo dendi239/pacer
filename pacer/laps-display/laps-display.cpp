@@ -438,7 +438,10 @@ void pacer::DeltaLapsComparision::Display(const Laps &laps) {
   std::vector<int> lap_ids(selected_laps.begin(), selected_laps.end());
   std::sort(lap_ids.begin(), lap_ids.end());
 
-  const ImVec4 cursor_color{0.7f, 0.7f, 0.7f, 0.8f};
+  // Derived from the theme's text color so the cursor line and its tag stay
+  // readable against both a dark and a light plot background.
+  ImVec4 cursor_color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+  cursor_color.w = 0.8f;
 
   // Draws the shared hover cursor: a vertical line at the hovered distance
   // plus a distance tag on the x-axis. Call inside a plot.

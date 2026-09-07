@@ -17,6 +17,7 @@
 #include <pacer/laps/laps.hpp>
 #include <pacer/map-tiles/implot-tiles.hpp>
 #include <pacer/map-tiles/tile-store.hpp>
+#include <pacer/ui/theme.hpp>
 
 using pacer::GPSSample;
 
@@ -139,6 +140,13 @@ int main(int argc, char **argv) {
   runnerParams.imGuiWindowParams.defaultImGuiWindowType =
       HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
   runnerParams.dockingParams = CreateDefaultLayout();
+
+  // Follow the host's dark/light setting instead of a theme of our own, and
+  // don't let the .ini restore a stale one over it. ImPlot needs nothing
+  // here: its default style is ImPlot::StyleColorsAuto, which derives plot
+  // colors from the ImGui style we just swapped.
+  runnerParams.imGuiWindowParams.rememberTheme = false;
+  runnerParams.callbacks.PreNewFrame = [] { pacer::FollowSystemTheme(); };
 
   runnerParams.imGuiWindowParams.showMenuBar = true;
   runnerParams.imGuiWindowParams.showMenu_App = false;

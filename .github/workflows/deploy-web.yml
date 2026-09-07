@@ -1,0 +1,81 @@
+name: Deploy track annotator to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "pacer/**"
+      - "tracks/**"
+      - "3rdparty/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/deploy-web.yml"
+  # So the site can be rebuilt without a code change, e.g. to pick up an
+  # edited track file.
+  workflow_dispatch:
+
+# One deployment at a time, and let a newer push finish rather than
+# cancelling it mid-way through publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hello_imgui, imgui, implot and friends are submodules; without
+          # them the configure step has nothing to build.
+          submodules: recursive
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          # Pinned to the version the web build was developed against; bump
+          # deliberately rather than letting CI drift onto a new toolchain.
+          version: 6.0.9
+          actions-cache-folder: emsdk-cache
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-web --target track_annotator
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          cp build-web/apps/track_annotator.html \
+             build-web/apps/track_annotator.js \
+             build-web/apps/track_annotator.wasm \
+             build-web/apps/track_annotator.data \
+             build-web/apps/track_annotator_favicon.png \
+             site/
+          # The shell page references its .js/.wasm/.data by relative name,
+          # so serving the same file as index.html needs no rewriting.
+          cp site/track_annotator.html site/index.html
+          # Pages runs the upload through Jekyll otherwise, which drops
+          # files it does not recognise.
+          touch site/.nojekyll
+          ls -lh site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

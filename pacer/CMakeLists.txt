@@ -69,12 +69,16 @@ endmacro()
 
 add_subdirectory(datatypes)
 add_subdirectory(geometry)
-add_subdirectory(gps-source)
 add_subdirectory(laps)
 add_subdirectory(reference-track)
-add_subdirectory(live-timing)
 add_subdirectory(ui)
-add_subdirectory(laps-display)
+if(NOT EMSCRIPTEN)
+    # Only the track annotator builds for wasm, and it needs none of these;
+    # gps-source in particular pulls in the GPMF video reader.
+    add_subdirectory(gps-source)
+    add_subdirectory(live-timing)
+    add_subdirectory(laps-display)
+endif()
 if(NOT SKBUILD)
     # Needs CURL and a GL context; only the desktop apps use it.
     add_subdirectory(map-tiles)

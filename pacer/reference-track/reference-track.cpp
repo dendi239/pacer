@@ -299,7 +299,7 @@ pacer::ReferenceTrack::FromFile(const std::string &filename) {
   return track;
 }
 
-void pacer::ReferenceTrack::SaveToFile(const std::string &filename) const {
+std::string pacer::ReferenceTrack::ToJsonString() const {
   nlohmann::json json;
   json["segments"] = nlohmann::json::array();
   for (const auto &seg : segments) {
@@ -309,11 +309,15 @@ void pacer::ReferenceTrack::SaveToFile(const std::string &filename) const {
   }
   json["sector_indices"] = sector_indices;
 
+  return json.dump(2);
+}
+
+void pacer::ReferenceTrack::SaveToFile(const std::string &filename) const {
   std::ofstream file(filename);
   if (!file.is_open()) {
     throw std::runtime_error("Unable to write file: " + filename);
   }
-  file << json.dump(2);
+  file << ToJsonString();
 }
 
 pacer::Sectors

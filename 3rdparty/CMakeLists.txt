@@ -51,6 +51,8 @@ add_library(implot::implot ALIAS implot)
 #                                    gpmf                                     #
 ###############################################################################
 
+# Only the video-reading tools need this, and none of them build for wasm.
+if(NOT EMSCRIPTEN)
 add_library(gpmf
     ${CMAKE_CURRENT_SOURCE_DIR}/gpmf-parser/GPMF_parser.c
     ${CMAKE_CURRENT_SOURCE_DIR}/gpmf-parser/GPMF_utils.c
@@ -60,6 +62,8 @@ add_library(gpmf
 target_include_directories(gpmf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/gpmf-parser)
 set_property(TARGET gpmf PROPERTY FOLDER "3rdparty")
 add_library(gpmf::gpmf ALIAS gpmf)
+endif()
+
 
 ###############################################################################
 ###############################################################################

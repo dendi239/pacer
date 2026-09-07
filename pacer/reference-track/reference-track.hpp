@@ -68,6 +68,12 @@ struct ReferenceTrack {
   /// Throws std::runtime_error on failure.
   static ReferenceTrack FromFile(const std::string &filename);
 
+  /// Serializes this track to the same JSON schema FromFile() reads. Split
+  /// out of SaveToFile() so callers with nowhere to write -- the web build
+  /// hands the bytes straight to the browser as a download -- can still
+  /// produce a file identical to the desktop one.
+  std::string ToJsonString() const;
+
   /// Writes this track using the same JSON schema. Throws
   /// std::runtime_error on failure.
   void SaveToFile(const std::string &filename) const;

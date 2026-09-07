@@ -13,6 +13,8 @@
 #include <pacer/map-tiles/canvas-tiles.hpp>
 #include <pacer/map-tiles/tile-store.hpp>
 #include <pacer/reference-track/reference-track.hpp>
+#include <pacer/ui/file-transfer.hpp>
+#include <pacer/ui/theme.hpp>
 #include <pacer/ui/track-picker.hpp>
 
 struct TrackPoint {
@@ -150,9 +152,11 @@ static bool SaveState(const TrackState &state, const std::string &filename) {
     }
   }
 
+  // Not SaveToFile: in the browser there is no path to write to, and the
+  // JSON has to be handed to the page as a download instead. OfferFileToUser
+  // is the same plain write on desktop.
   try {
-    track.SaveToFile(filename);
-    return true;
+    return pacer::OfferFileToUser(filename, track.ToJsonString());
   } catch (const std::exception &) {
     return false;
   }
@@ -373,18 +377,26 @@ static void DrawControlPanel(TrackState &state, float width) {
   }
 
   ImGui::Spacing();
+  // In the browser the app cannot reach the user's disk: the combo lists
+  // only the tracks bundled into the page, saving is a download, and
+  // opening anything else goes through the browser's own file dialog.
+  const bool via_host = pacer::NeedsHostFileTransfer();
   ImGui::TextWrapped(
-      "Save / Load read and write the gates and sector markings to the "
-      "selected track file.");
+      via_host ? "Download writes the gates and sector markings out as a "
+                 "JSON file. Load reads one of the bundled tracks; Open "
+                 "file... reads a JSON file from your computer."
+               : "Save / Load read and write the gates and sector markings "
+                 "to the selected track file.");
   state.picker.Draw("track_file");
-  if (ImGui::Button("Save##save")) {
+  if (ImGui::Button(via_host ? "Download##save" : "Save##save")) {
     if (state.picker.path.empty() || !SaveState(state, state.picker.path)) {
       state.last_message =
           "Unable to write state to '" + state.picker.path + "'";
       HelloImGui::Log(HelloImGui::LogLevel::Error, "%s",
                       state.last_message.c_str());
     } else {
-      state.last_message = "Saved state to '" + state.picker.path + "'";
+      state.last_message = (via_host ? "Downloaded '" : "Saved state to '") +
+                           state.picker.path + "'";
       state.picker.Refresh();
       HelloImGui::Log(HelloImGui::LogLevel::Info, "%s",
                       state.last_message.c_str());
@@ -413,6 +425,14 @@ static void DrawControlPanel(TrackState &state, float width) {
       state.last_message = "Loaded state from '" + state.picker.path + "'";
       HelloImGui::Log(HelloImGui::LogLevel::Info, "%s",
                       state.last_message.c_str());
+    }
+  }
+  if (via_host) {
+    ImGui::SameLine();
+    // Fires the browser's file dialog. The pick is asynchronous; the chosen
+    // file arrives back in ShowAnnotatorGui() a few frames later.
+    if (ImGui::Button("Open file...##upload")) {
+      pacer::RequestFileFromUser(".json,application/json");
     }
   }
 
@@ -470,7 +490,10 @@ static void DrawControlPanel(TrackState &state, float width) {
   }
   if (!state.last_message.empty()) {
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.9f, 0.5f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          pacer::IsDarkTheme()
+                              ? ImVec4(1.0f, 0.9f, 0.5f, 1.0f)
+                              : ImVec4(0.62f, 0.42f, 0.0f, 1.0f));
     ImGui::TextWrapped("%s", state.last_message.c_str());
     ImGui::PopStyleColor();
   }
@@ -651,7 +674,10 @@ static void DrawTrackOverlay(const TrackState &state, ImDrawList *draw_list,
     float radius = bold ? 8.0f : 6.0f;
     float outline_thickness = bold ? 3.0f : 2.0f;
     float line_thickness = bold ? 4.0f : 2.0f;
-    draw_list->AddLine(sa, sb, IM_COL32(180, 200, 220, 160), line_thickness);
+    draw_list->AddLine(sa, sb,
+                       pacer::IsDarkTheme() ? IM_COL32(180, 200, 220, 160)
+                                            : IM_COL32(70, 90, 110, 180),
+                       line_thickness);
     draw_list->AddCircleFilled(sa, radius, colorA);
     draw_list->AddCircle(sa, radius + 0.5f, IM_COL32(60, 80, 100, 180), 12,
                          outline_thickness);
@@ -660,13 +686,17 @@ static void DrawTrackOverlay(const TrackState &state, ImDrawList *draw_list,
                          outline_thickness);
   }
 
-  draw_list->AddRect(canvas_min, canvas_max, IM_COL32(255, 255, 255, 80), 0.0f,
-                     0, 2.0f);
+  draw_list->AddRect(canvas_min, canvas_max,
+                     pacer::IsDarkTheme() ? IM_COL32(255, 255, 255, 80)
+                                          : IM_COL32(0, 0, 0, 70),
+                     0.0f, 0, 2.0f);
 }
 
 // Right column: satellite map, track overlay, and pan/zoom/edit input.
 static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(12, 12, 18, 255));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                        pacer::IsDarkTheme() ? IM_COL32(12, 12, 18, 255)
+                                             : IM_COL32(232, 232, 238, 255));
   ImGui::BeginChild("map_canvas", canvas_size, true,
                     ImGuiWindowFlags_NoScrollbar);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
@@ -697,6 +727,24 @@ static void DrawMapCanvas(TrackState &state, const ImVec2 &canvas_size) {
 static void ShowAnnotatorGui(TrackState &state) {
   state.tiles.ApplyResults();
 
+  // A file picked through the host's file dialog lands in the app's
+  // filesystem some frames after the click, never mid-frame. Once it does,
+  // it is an ordinary Load of that path.
+  if (std::string received = pacer::TakeReceivedFile(); !received.empty()) {
+    PushUndo(state);
+    if (LoadState(state, received)) {
+      state.picker.path = received;
+      state.last_message = "Loaded state from '" + received + "'";
+      HelloImGui::Log(HelloImGui::LogLevel::Info, "%s",
+                      state.last_message.c_str());
+    } else {
+      state.undo_stack.pop_back(); // load failed, nothing actually changed
+      state.last_message = "Unable to load state from '" + received + "'";
+      HelloImGui::Log(HelloImGui::LogLevel::Error, "%s",
+                      state.last_message.c_str());
+    }
+  }
+
   // Power save: idle slowly, but poll faster while tile downloads are in
   // flight -- the worker threads cannot wake the idle event loop, so late
   // tiles would otherwise only appear on the next slow idle frame.
@@ -718,7 +766,20 @@ static void ShowAnnotatorGui(TrackState &state) {
     }
   }
 
-  ImGui::Begin("Track Annotator");
+  ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+#ifdef __EMSCRIPTEN__
+  // The browser owns the window. There is no OS window for this one to fill
+  // only part of, and no ini file surviving a reload to restore a
+  // hand-adjusted size from -- left alone it comes up at ImGui's default
+  // floating size in the corner of the page. Pin it to the viewport instead.
+  const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(viewport->WorkPos);
+  ImGui::SetNextWindowSize(viewport->WorkSize);
+  window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus;
+#endif
+  ImGui::Begin("Track Annotator", nullptr, window_flags);
 
   // Two-column layout: left = controls (~30%), right = map (~70%)
   float avail_w = ImGui::GetContentRegionAvail().x;
@@ -757,6 +818,12 @@ int main(int argc, char **argv) {
   state.view.lat = 51.37600;
   state.view.lon = -0.36100;
   state.picker.path = "track_annotation.json";
+#ifdef __EMSCRIPTEN__
+  // The repo's tracks/ is preloaded into the wasm filesystem at a fixed
+  // absolute path; there is no meaningful working directory to make the
+  // desktop default ("tracks") relative to.
+  state.picker.directory = "/tracks";
+#endif
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
@@ -793,6 +860,10 @@ int main(int argc, char **argv) {
   runnerParams.imGuiWindowParams.showStatusBar = true;
   runnerParams.iniFolderType = HelloImGui::IniFolderType::AppUserConfigFolder;
   runnerParams.iniFilename = "TrackAnnotator/track_annotator.ini";
+  // Follow the host's dark/light setting instead of a theme of our own, and
+  // don't let the .ini restore a stale one over it.
+  runnerParams.imGuiWindowParams.rememberTheme = false;
+  runnerParams.callbacks.PreNewFrame = [] { pacer::FollowSystemTheme(); };
   runnerParams.callbacks.ShowGui = [&state] { ShowAnnotatorGui(state); };
   HelloImGui::Run(runnerParams);
   return 0;

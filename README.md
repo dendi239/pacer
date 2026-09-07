@@ -25,6 +25,28 @@ cmake -S . -B build/Release -G Ninja  # creates build tree
 cmake --build build/Release           # builds everything
 ```
 
+### track annotator on the web
+
+`apps/track_annotator.cpp` also builds to WebAssembly, so gates can be drawn
+in a browser with nothing installed:
+
+```bash
+scripts/build-web.sh --serve   # http://localhost:8000/track_annotator.html
+```
+
+The script picks up the Emscripten SDK from `$EMSDK` or `~/emsdk`; see the
+comment at the top of it for how to install one. Opening the built `.html`
+straight off disk does not work --- the browser refuses to load the `.wasm`
+and `.data` next to it over `file://` --- hence the little server.
+
+The repo's `tracks/*.json` are baked into the page, so the picker has a
+library to open out of the box. Saving is a plain browser download of the
+same JSON schema the desktop app writes, and `Open file...` reads one back
+in off your machine.
+
+Pushing to `main` publishes it to GitHub Pages via
+`.github/workflows/deploy-web.yml`.
+
 ### what to do?
 
 There're two good places to get started:
@@ -61,7 +83,6 @@ Still in progress:
   - keep minimum speed higher;
   - etc.
 - timestamp interpolation in C++;
-- emscripten based web app;
 - gradient descent (maybe something else) to properly get timestamp within C++;
 - clean up the code (lmao).
 
@@ -70,6 +91,7 @@ Wow, something already done:
 - lap segmentation, comparision between laps with delta;
 - nanobind-based python bindings to rapidly experiment in python (I've been putting it off due to shitty code);
 - integration with 3rd party gps data, e.g. from sampled file, consider building ios app for capturing;
+- emscripten based web app --- the track annotator runs in the browser and exports its JSON as a download;
 
 ## credits
 

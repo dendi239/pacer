@@ -2,6 +2,9 @@
 .cache
 .vscode
 build/
+# emscripten build tree and the assembled Pages site
+build-web/
+site/
 __pycache__/
 xcode-build/
 *.ini

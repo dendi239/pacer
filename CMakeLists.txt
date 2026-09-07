@@ -15,12 +15,16 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 enable_testing()
 
-find_package(Python 3.11
-    REQUIRED COMPONENTS Interpreter Development.Module
-    OPTIONAL_COMPONENTS Development.SABIModule)
-find_package(glfw3 REQUIRED)
-find_package(OpenGL REQUIRED)
-find_package(Catch2 REQUIRED)
+# The wasm build has none of these: emscripten supplies its own GL and SDL
+# ports, and nothing it builds binds to Python or runs the Catch2 suite.
+if(NOT EMSCRIPTEN)
+    find_package(Python 3.11
+        REQUIRED COMPONENTS Interpreter Development.Module
+        OPTIONAL_COMPONENTS Development.SABIModule)
+    find_package(glfw3 REQUIRED)
+    find_package(OpenGL REQUIRED)
+    find_package(Catch2 REQUIRED)
+endif()
 
 add_subdirectory(3rdparty)
 add_subdirectory(pacer)
@@ -28,7 +32,7 @@ if(NOT SKBUILD)
     add_subdirectory(apps)
 endif()
 # The following are optional components that may cause build issues during pip install.
-if(NOT SKBUILD)
+if(NOT SKBUILD AND NOT EMSCRIPTEN)
     add_subdirectory(examples)
     add_subdirectory(tests)
 endif()
