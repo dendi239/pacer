@@ -78,6 +78,9 @@ if(NOT EMSCRIPTEN)
     add_subdirectory(gps-source)
     add_subdirectory(live-timing)
     add_subdirectory(laps-display)
+    # Depends on gps-source (and so on the GPMF reader), hence desktop-only.
+    add_subdirectory(session)
+    add_subdirectory(source-view)
 endif()
 if(NOT SKBUILD)
     # Needs CURL and a GL context; only the desktop apps use it.

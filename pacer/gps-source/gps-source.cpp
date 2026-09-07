@@ -376,6 +376,63 @@ static bool HasExtension(const std::string &filename, const std::string &ext) {
   return lower_ext == ext;
 }
 
+bool LoadGPSFile(const std::string &filename,
+                 const std::function<void(GPSSample)> &on_sample,
+                 GPSFileInfo *info, std::string *error) {
+  GPSFileInfo local_info;
+  GPSFileInfo &out = info ? *info : local_info;
+  out = GPSFileInfo{};
+
+  if (filename.empty()) {
+    if (error)
+      *error = "empty path";
+    return false;
+  }
+  if (!std::ifstream(filename).is_open()) {
+    if (error)
+      *error = filename + ": not found";
+    return false;
+  }
+
+  if (HasExtension(filename, ".dat")) {
+    ReadDatFile(
+        filename.c_str(),
+        [&](GPSSample sample, double) {
+          ++out.sample_count;
+          on_sample(sample);
+        },
+        DatVersion::WITH_TIMESTAMP);
+    return true;
+  }
+
+  try {
+    GPMFSource source(filename.c_str());
+    source.Seek(0);
+    double file_duration_s = 0.0;
+    while (!source.IsEnd()) {
+      auto [start, end] = source.CurrentTimeSpan();
+      source.RawGPSSource::Samples(
+          [&](GPSSample sample, size_t current, size_t total) {
+            if (sample.timestamp_ms == 0) {
+              double t = start + (total ? (end - start) * current / total : 0.0);
+              sample.timestamp_ms = static_cast<int64_t>(t * 1000);
+              out.uses_fallback_clock = true;
+            }
+            ++out.sample_count;
+            on_sample(sample);
+          });
+      file_duration_s = std::max(file_duration_s, end);
+      source.Next();
+    }
+    out.fallback_span_s = file_duration_s;
+    return true;
+  } catch (const std::exception &e) {
+    if (error)
+      *error = filename + ": " + e.what();
+    return false;
+  }
+}
+
 size_t LoadGPSFiles(const std::vector<std::string> &filenames,
                     const std::function<void(GPSSample)> &on_sample,
                     std::vector<std::string> *errors) {
@@ -387,45 +444,31 @@ size_t LoadGPSFiles(const std::vector<std::string> &filenames,
   for (const auto &filename : filenames) {
     if (filename.empty())
       continue;
-    if (!std::ifstream(filename).is_open()) {
+
+    GPSFileInfo info;
+    std::string error;
+    const int64_t shift_ms = static_cast<int64_t>(fallback_offset_s * 1000);
+    // LoadGPSFile stamps synthesized samples relative to the file's own
+    // start; shifting them here is what chains the clock across files.
+    // uses_fallback_clock is set just before each synthesized sample is
+    // handed over, so a file that carries real timestamps is left alone.
+    bool loaded = LoadGPSFile(
+        filename,
+        [&](GPSSample sample) {
+          if (info.uses_fallback_clock)
+            sample.timestamp_ms += shift_ms;
+          on_sample(sample);
+        },
+        &info, &error);
+
+    if (!loaded) {
       if (errors)
-        errors->push_back(filename + ": not found");
+        errors->push_back(error);
       continue;
     }
 
-    if (HasExtension(filename, ".dat")) {
-      ReadDatFile(
-          filename.c_str(),
-          [&](GPSSample sample, double) { on_sample(sample); },
-          DatVersion::WITH_TIMESTAMP);
-      ++loaded_files;
-      continue;
-    }
-
-    try {
-      GPMFSource source(filename.c_str());
-      source.Seek(0);
-      double file_duration_s = 0.0;
-      while (!source.IsEnd()) {
-        auto [start, end] = source.CurrentTimeSpan();
-        source.RawGPSSource::Samples(
-            [&](GPSSample sample, size_t current, size_t total) {
-              if (sample.timestamp_ms == 0) {
-                double t = fallback_offset_s + start +
-                           (total ? (end - start) * current / total : 0.0);
-                sample.timestamp_ms = static_cast<int64_t>(t * 1000);
-              }
-              on_sample(sample);
-            });
-        file_duration_s = std::max(file_duration_s, end);
-        source.Next();
-      }
-      fallback_offset_s += file_duration_s;
-      ++loaded_files;
-    } catch (const std::exception &e) {
-      if (errors)
-        errors->push_back(filename + ": " + e.what());
-    }
+    fallback_offset_s += info.fallback_span_s;
+    ++loaded_files;
   }
 
   return loaded_files;

@@ -7,6 +7,8 @@ if(NOT SKBUILD)
             pacer::gps-source
             pacer::laps-display
             pacer::map-tiles
+            pacer::session
+            pacer::source-view
             pacer::ui
         )
     endif()

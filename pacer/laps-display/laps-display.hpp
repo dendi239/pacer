@@ -72,6 +72,12 @@ struct DeltaLapsComparision {
 
   void PlotSticks();
 
+  /// Adopts `track` (and its coordinate system) as the frame this
+  /// comparison resamples and plots in, and schedules the axis refits that
+  /// a new track needs. The track itself is owned by the Source the laps
+  /// come from; this is the comparison's working copy.
+  void SetReferenceTrack(const ReferenceTrack &track);
+
   /// Draws the picker/load UI. On a successful load the reference track's
   /// own coordinate system becomes the map frame: it is pushed into
   /// `display` (and from there into `laps`), adopted as this->cs, and the

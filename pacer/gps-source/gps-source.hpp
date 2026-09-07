@@ -162,6 +162,35 @@ void ReadDatFile(const char *filename, F on_sample,
       version);
 }
 
+/// What LoadGPSFile() learned about a file beyond its samples, so a caller
+/// caching per-file samples can reproduce the cross-file clock chaining that
+/// LoadGPSFiles() does in one pass.
+struct GPSFileInfo {
+  /// How far this file advances the synthetic clock for the files after it,
+  /// in seconds. Zero for sources that carry their own timestamps.
+  double fallback_span_s = 0;
+
+  /// True when at least one sample had no embedded timestamp and was stamped
+  /// from the synthetic clock instead. Such samples are stamped relative to
+  /// this file's own start, so a caller concatenating cached files must shift
+  /// them by the running offset. In practice a GPMF file either carries GPS
+  /// timestamps throughout or not at all, so the flag is per file rather than
+  /// per sample.
+  bool uses_fallback_clock = false;
+
+  /// Number of samples handed to `on_sample`.
+  size_t sample_count = 0;
+};
+
+/// Loads GPS samples from one .dat or GPMF (.mp4 etc.) file. Samples that
+/// predate embedded timestamps are stamped from a clock synthesized from the
+/// MP4 chunk spans, starting at zero -- chaining across files is the caller's
+/// job (see GPSFileInfo). Returns false and fills `error` (if non-null) when
+/// the file is missing or unreadable.
+bool LoadGPSFile(const std::string &filename,
+                 const std::function<void(GPSSample)> &on_sample,
+                 GPSFileInfo *info = nullptr, std::string *error = nullptr);
+
 /// Loads GPS samples from a mix of .dat and GPMF (.mp4 etc.) files, in the
 /// given order. Samples that predate embedded timestamps get a clock
 /// synthesized from the MP4 chunk spans, chained across files so they stay

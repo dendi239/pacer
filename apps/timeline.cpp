@@ -12,48 +12,18 @@
 
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
-#include <pacer/gps-source/gps-source.hpp>
 #include <pacer/laps-display/laps-display.hpp>
-#include <pacer/laps/laps.hpp>
 #include <pacer/map-tiles/implot-tiles.hpp>
 #include <pacer/map-tiles/tile-store.hpp>
+#include <pacer/session/session.hpp>
+#include <pacer/source-view/source-view.hpp>
 #include <pacer/ui/theme.hpp>
 
-using pacer::GPSSample;
-
-static bool LoadLapsFromFiles(pacer::Laps *plaps,
-                              const std::vector<std::string> &filenames,
-                              std::string &message) {
-  plaps->ClearPoints();
-  std::vector<std::string> errors;
-  size_t loaded_files = pacer::LoadGPSFiles(
-      filenames, [&](GPSSample sample) { plaps->AddPoint(sample); }, &errors);
-
-  if (loaded_files == 0) {
-    message = "No files loaded.";
-    if (!errors.empty())
-      message += " " + errors.front();
-    return false;
-  }
-
-  if (!errors.empty()) {
-    message = "Loaded files with errors: ";
-    for (size_t i = 0; i < errors.size(); ++i) {
-      if (i > 0)
-        message += "; ";
-      message += errors[i];
-    }
-    return true;
-  }
-
-  message = "Loaded " + std::to_string(plaps->PointCount()) + " points from " +
-            std::to_string(loaded_files) + " files.";
-  return true;
-}
-
-// Sensible default docking layout setup
-// We split the screen into Left column (controls), Center (Map/Chart), and
-// Right column (Delta/Telemetry)
+// Sensible default docking layout setup.
+//
+// Each dockspace holds one kind of view, so the windows a second source adds
+// become tabs in the spaces that are already there instead of splitting the
+// layout further.
 HelloImGui::DockingParams CreateDefaultLayout() {
   HelloImGui::DockingParams result;
   result.dockingSplits = {
@@ -78,53 +48,36 @@ HelloImGui::DockingParams CreateDefaultLayout() {
 
 // Main code
 int main(int argc, char **argv) {
-  pacer::Laps laps;
+  pacer::Session session;
+  pacer::Source *source = session.NewSource();
 
-  std::vector<std::string> load_filenames = {""};
-  std::string load_message = "Enter file paths and click Load files.";
-
-  auto laps_display = pacer::LapsDisplay{&laps};
-  pacer::DeltaLapsComparision delta;
   pacer::TileStore tile_store;
   bool show_map_tiles = true;
 
   // Dev convenience: `timeline data.MP4 ... track.json --laps 3,5` loads
   // everything a manual session would click together: data files, the
   // reference track (any .json argument), and the delta lap selection.
-  {
-    std::vector<std::string> data_files;
-    std::string track_file;
-    for (int i = 1; i < argc; ++i) {
-      std::string arg = argv[i];
-      if (arg == "--laps" && i + 1 < argc) {
-        std::stringstream ss(argv[++i]);
-        for (std::string id; std::getline(ss, id, ',');) {
-          delta.selected_laps.insert(std::stoi(id));
-        }
-      } else if (arg.ends_with(".json")) {
-        track_file = arg;
-      } else {
-        data_files.push_back(arg);
+  std::vector<int> preselected_laps;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--laps" && i + 1 < argc) {
+      std::stringstream ss(argv[++i]);
+      for (std::string id; std::getline(ss, id, ',');) {
+        preselected_laps.push_back(std::stoi(id));
       }
+    } else if (arg.ends_with(".json")) {
+      source->LoadTrack(arg);
+    } else {
+      source->AddFile(arg);
     }
-    if (!data_files.empty()) {
-      load_filenames = data_files;
-      LoadLapsFromFiles(&laps, load_filenames, load_message);
-    }
-    if (!track_file.empty()) {
-      delta.reference_track_picker.path = track_file;
-      try {
-        delta.reference_track = pacer::ReferenceTrack::FromFile(track_file);
-        if (!delta.reference_track.segments.empty()) {
-          laps_display.SetMapFrame(delta.reference_track.cs);
-          delta.cs = delta.reference_track.cs;
-          laps.sectors = delta.reference_track.BuildSectors(
-              delta.reference_track.cs);
-        }
-      } catch (const std::exception &e) {
-        load_message += std::string(" Reference track error: ") + e.what();
-      }
-    }
+  }
+
+  // Built after the CLI load so the view picks up the track's map frame.
+  auto source_view = pacer::SourceView{source};
+  pacer::DeltaLapsComparision delta;
+  int synced_track_generation = -1;
+  for (int lap : preselected_laps) {
+    delta.selected_laps.insert(lap);
   }
 
   auto implotContext = ImPlot::CreateContext();
@@ -164,207 +117,103 @@ int main(int argc, char **argv) {
   };
 
   // Define GUI Dockable Windows
-  HelloImGui::DockableWindow loadFilesWindow;
-  loadFilesWindow.label = "Load Data Files";
-  loadFilesWindow.dockSpaceName = "LeftSpace";
-  loadFilesWindow.callBeginEnd = false;
-  loadFilesWindow.canBeClosed = false;
-  loadFilesWindow.GuiFunction = [&]() {
-    if (ImGui::Begin("Load Data Files")) {
-      ImGui::Text("Data files to load:");
-      ImGui::SameLine();
-      if (ImGui::Button("+")) {
-        load_filenames.emplace_back("");
-      }
-      for (int i = 0; i < (int)load_filenames.size(); ++i) {
-        ImGui::PushID(i);
-        ImGui::SetNextItemWidth(ImGui::GetWindowWidth() - 120);
-        ImGui::InputText("File", &load_filenames[i]);
-        ImGui::SameLine();
-        if (ImGui::Button("Remove") && load_filenames.size() > 1) {
-          load_filenames.erase(load_filenames.begin() + i);
-          ImGui::PopID();
-          break;
-        }
-        ImGui::PopID();
-      }
-      if (ImGui::Button("Load files")) {
-        if (LoadLapsFromFiles(&laps, load_filenames, load_message)) {
-          laps_display.bounds = {{1.0, 1.0}, {0.0, 0.0}};
-          laps_display.selected_lap = -1;
-          delta.selected_laps.clear();
-          if (delta.reference_track.segments.empty()) {
-            laps.sectors = pacer::Sectors{};
-          } else {
-            // The map frame is supplied by the reference track, so it
-            // survives a data reload; re-apply the sectors in that frame.
-            laps.sectors =
-                delta.reference_track.BuildSectors(delta.reference_track.cs);
-          }
-        }
-      }
-      if (!load_message.empty()) {
-        ImGui::TextWrapped("%s", load_message.c_str());
-      }
-    }
-    ImGui::End();
-  };
+  HelloImGui::DockableWindow trackWindow;
+  trackWindow.label = "Track";
+  trackWindow.dockSpaceName = "LeftSpace";
+  trackWindow.GuiFunction = [&]() { source_view.DrawTrackPanel(); };
+
+  HelloImGui::DockableWindow filesWindow;
+  filesWindow.label = "Files";
+  filesWindow.dockSpaceName = "LeftSpace";
+  filesWindow.GuiFunction = [&]() { source_view.DrawFilesPanel(); };
 
   HelloImGui::DockableWindow mapWindow;
   mapWindow.label = "Map";
   mapWindow.dockSpaceName = "MainDockSpace";
-  mapWindow.callBeginEnd = false;
-  mapWindow.canBeClosed = false;
   mapWindow.GuiFunction = [&]() {
-    if (ImGui::Begin("Map")) {
-      ImGui::Checkbox("Show map", &show_map_tiles);
-      if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
-        laps_display.SetupMap();
-        if (show_map_tiles && laps_display.HasMapFrame()) {
-          pacer::PlotSatelliteTiles(tile_store, laps_display.cs);
-        }
-        laps_display.PlotMapItems();
-
-        if (laps.PointCount() > 0) {
-          auto last = laps.GetPoint(laps.PointCount() - 1);
-          std::stringstream ss;
-          ss << "Speed: " << last.full_speed * 3.6 << "km/h";
-          auto point = laps_display.ToImPlotPoint(last);
-          ImPlot::PlotText(ss.str().data(), point[0], point[1]);
-        }
-        delta.PlotSticks();
-        ImPlot::EndPlot();
+    pacer::LapsDisplay &display = source_view.display;
+    ImGui::Checkbox("Show map", &show_map_tiles);
+    if (ImPlot::BeginPlot("GPS", ImVec2(-1, -1), ImPlotFlags_Equal)) {
+      display.SetupMap();
+      if (show_map_tiles && display.HasMapFrame()) {
+        pacer::PlotSatelliteTiles(tile_store, display.cs);
       }
+      display.PlotMapItems();
+
+      if (source->laps.PointCount() > 0) {
+        auto last = source->laps.GetPoint(source->laps.PointCount() - 1);
+        std::stringstream ss;
+        ss << "Speed: " << last.full_speed * 3.6 << "km/h";
+        auto point = display.ToImPlotPoint(last);
+        ImPlot::PlotText(ss.str().data(), point[0], point[1]);
+      }
+      delta.PlotSticks();
+      ImPlot::EndPlot();
     }
-    ImGui::End();
   };
 
   HelloImGui::DockableWindow lapsWindow;
   lapsWindow.label = "Laps";
   lapsWindow.dockSpaceName = "LeftBottomSpace";
-  lapsWindow.callBeginEnd = false;
-  lapsWindow.canBeClosed = false;
-  lapsWindow.GuiFunction = [&]() {
-    delta.cs = laps_display.cs;
-
-    if (ImGui::Begin("Laps")) {
-      delta.DrawReferenceTrackLoader(laps, laps_display);
-      if (laps.PointCount() > 0 && laps.LapsCount() == 0) {
-        ImGui::TextWrapped(
-            "Load a reference track to split the data into laps and sectors.");
-      }
-      laps_display.DisplayTable();
-    }
-    ImGui::End();
-  };
+  lapsWindow.GuiFunction = [&]() { source_view.DrawLapTablePanel(); };
 
   HelloImGui::DockableWindow lapChartWindow;
   lapChartWindow.label = "Lap chart";
   lapChartWindow.dockSpaceName = "BottomCenterSpace";
-  lapChartWindow.callBeginEnd = false;
-  lapChartWindow.canBeClosed = false;
-  lapChartWindow.GuiFunction = [&]() {
-    if (ImGui::Begin("Lap chart")) {
-      static float lap_cutoff = 107;
-      ImGui::SliderFloat("Cutoff", &lap_cutoff, 100, 125);
-
-      if (ImPlot::BeginPlot("Lap time chart", ImVec2(-1, -1),
-                            ImPlotFlags_NoTitle)) {
-        float best_lap = 1e9f;
-        for (size_t i = 1; i < laps.LapsCount(); ++i) {
-          float t = laps.LapTime(i);
-          if (t > 1.0f && t < best_lap) {
-            best_lap = t;
-          }
-        }
-        if (best_lap == 1e9f) {
-          best_lap = (laps.LapsCount() > 0) ? laps.LapTime(0) : 0.0f;
-        }
-
-        std::tuple<pacer::Laps &, float, float &> data{laps, best_lap,
-                                                       lap_cutoff};
-
-        auto getter = [](int index, void *data) {
-          auto &[laps, best, cutoff] =
-              *reinterpret_cast<std::tuple<pacer::Laps &, float, float &> *>(
-                  data);
-          auto lap = laps.GetLap(index);
-          float time = lap.LapTime();
-          if (time > cutoff * best / 100 || time < best)
-            time = NAN;
-          return ImPlotPoint((float)index, time);
-        };
-
-        ImPlot::PlotLineG("Lap Time", getter, &data, laps.LapsCount());
-        ImPlot::PlotScatterG("Lap Time", getter, &data, laps.LapsCount());
-        ImPlot::EndPlot();
-      }
-    }
-    ImGui::End();
-  };
+  lapChartWindow.GuiFunction = [&]() { source_view.DrawLapChartPanel(); };
 
   HelloImGui::DockableWindow deltaWindow;
   deltaWindow.label = "Delta";
   deltaWindow.dockSpaceName = "RightSpace";
-  deltaWindow.callBeginEnd = false;
-  deltaWindow.canBeClosed = false;
-  deltaWindow.GuiFunction = [&]() {
-    if (ImGui::Begin("Delta")) {
-      delta.Display(laps);
-    }
-    ImGui::End();
-  };
+  deltaWindow.GuiFunction = [&]() { delta.Display(source->laps); };
 
   // Map view of the delta comparison: the selected laps' trajectories over
   // the reference track, with hover markers synced to the Delta window.
   HelloImGui::DockableWindow comparisonMapWindow;
   comparisonMapWindow.label = "Comparison Map";
   comparisonMapWindow.dockSpaceName = "RightBottomSpace";
-  comparisonMapWindow.callBeginEnd = false;
-  comparisonMapWindow.canBeClosed = false;
   comparisonMapWindow.GuiFunction = [&]() {
-    if (ImGui::Begin("Comparison Map")) {
-      if (delta.reference_track.segments.empty()) {
-        ImGui::TextWrapped(
-            "Load a reference track to compare laps on the map.");
-      } else {
-        ImGui::Checkbox("Satellite", &delta.show_satellite);
-        ImGui::SameLine();
-        ImGui::Checkbox("Reference track", &delta.show_reference_track);
-        if (ImPlot::BeginPlot("##comparison_map", ImVec2(-1, -1),
-                              ImPlotFlags_Equal)) {
-          delta.SetupComparisonMap();
-          if (delta.show_satellite) {
-            pacer::PlotSatelliteTiles(tile_store, delta.cs);
-          }
-          delta.PlotComparisonMap(laps);
-          ImPlot::EndPlot();
-        }
-      }
+    if (delta.reference_track.segments.empty()) {
+      ImGui::TextWrapped("Load a reference track to compare laps on the map.");
+      return;
     }
-    ImGui::End();
+    ImGui::Checkbox("Satellite", &delta.show_satellite);
+    ImGui::SameLine();
+    ImGui::Checkbox("Reference track", &delta.show_reference_track);
+    if (ImPlot::BeginPlot("##comparison_map", ImVec2(-1, -1),
+                          ImPlotFlags_Equal)) {
+      delta.SetupComparisonMap();
+      if (delta.show_satellite) {
+        pacer::PlotSatelliteTiles(tile_store, delta.cs);
+      }
+      delta.PlotComparisonMap(source->laps);
+      ImPlot::EndPlot();
+    }
   };
 
   HelloImGui::DockableWindow lapTelemetryWindow;
   lapTelemetryWindow.label = "Lap Telemetry";
   lapTelemetryWindow.dockSpaceName = "RightBottomSpace";
-  lapTelemetryWindow.callBeginEnd = false;
-  lapTelemetryWindow.canBeClosed = false;
   lapTelemetryWindow.GuiFunction = [&]() {
-    if (ImGui::Begin("Lap Telemetry")) {
-      laps_display.DisplayLapTelemetry();
-    }
-    ImGui::End();
+    source_view.display.DisplayLapTelemetry();
   };
 
   // Windows are docked in list order; the last one docked into a dockspace
   // becomes its selected tab, so Comparison Map goes after Lap Telemetry.
   runnerParams.dockingParams.dockableWindows = {
-      loadFilesWindow, mapWindow,          lapsWindow,         lapChartWindow,
-      deltaWindow,     lapTelemetryWindow, comparisonMapWindow};
+      trackWindow,    filesWindow,        lapsWindow,         mapWindow,
+      lapChartWindow, deltaWindow,        lapTelemetryWindow,
+      comparisonMapWindow};
 
   runnerParams.callbacks.ShowGui = [&]() {
-    laps.Update();
+    source_view.Update();
+    // The comparison keeps its own copy of the track (it will adopt one from
+    // the laps dropped into it once comparisons are first-class); re-take it
+    // whenever the source's track changes.
+    if (synced_track_generation != source->track_generation) {
+      synced_track_generation = source->track_generation;
+      delta.SetReferenceTrack(source->track);
+    }
     // Drain finished downloads even when the Map window is not drawn, so
     // PendingCount() falls back to zero and the idle rate can drop again.
     tile_store.ApplyResults();

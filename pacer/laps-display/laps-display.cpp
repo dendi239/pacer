@@ -347,6 +347,14 @@ void pacer::DeltaLapsComparision::RefreshResampled(const Laps &laps) {
   }
 }
 
+void pacer::DeltaLapsComparision::SetReferenceTrack(
+    const ReferenceTrack &track) {
+  reference_track = track;
+  cs = track.cs;
+  map_needs_fit_ = true;
+  plots_need_fit_ = true;
+}
+
 void pacer::DeltaLapsComparision::DrawReferenceTrackLoader(
     Laps &laps, LapsDisplay &display) {
   bool load = reference_track_picker.Draw("reference_track");

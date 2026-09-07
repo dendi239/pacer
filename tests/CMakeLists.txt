@@ -49,3 +49,16 @@ add_test(
 )
 
 set_property(TARGET test_tile_queue PROPERTY FOLDER "tests")
+
+add_executable(test_session test_session.cpp)
+target_link_libraries(test_session PRIVATE
+    pacer::session
+    Catch2::Catch2WithMain)
+
+add_test(
+    NAME test_session
+    COMMAND test_session
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+set_property(TARGET test_session PROPERTY FOLDER "tests")
