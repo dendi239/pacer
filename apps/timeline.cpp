@@ -5,6 +5,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <hello_imgui/docking_params.h>
@@ -12,6 +13,7 @@
 #include <hello_imgui/runner_callbacks.h>
 #include <hello_imgui/runner_params.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <implot.h>
 
@@ -120,6 +122,31 @@ struct TimelineApp {
   int want_remove_source = -1;
   bool want_new_comparison = false;
   int want_remove_comparison = -1;
+  /// Session file to open at the top of the next frame; opening one tears
+  /// down every window the current session owns.
+  std::string want_open_session;
+  /// Set once that teardown has been requested, and loaded a frame later.
+  /// A restored source keeps its saved id, so its windows carry the same
+  /// ImGui identities as the ones being torn down -- and hello_imgui only
+  /// drops the old ones on the next PreNewFrame. Adding the new ones in the
+  /// same frame leaves two windows sharing an identity, and some of them
+  /// come back floating instead of docked.
+  std::string opening_session;
+
+  /// Windows added at runtime, waiting to be docked beside a sibling of the
+  /// same kind: {new label, sibling label}. hello_imgui's own
+  /// AddDockableWindow docking only lands reliably in MainDockSpace here --
+  /// windows bound for the other dockspaces come up floating -- and docking
+  /// beside the panel of the same kind that is already open is what the
+  /// layout wants anyway: a second source's lap chart belongs next to the
+  /// first source's, wherever the user has since moved it.
+  std::vector<std::pair<std::string, std::string>> pending_dock;
+
+  /// Counts down to the layout rebuild a session open asks for; 0 when
+  /// none is pending. See OpenSession for why it is delayed.
+  int frames_until_layout_reset_ = 0;
+  std::string session_path = "session.json";
+  std::string session_status;
   /// Lap to put into a comparison created by dropping it on "New
   /// comparison": the drop and the creation are a frame apart.
   pacer::LapRef pending_drop;
@@ -178,6 +205,15 @@ struct TimelineApp {
       int panel_index = (int)i;
       window.GuiFunction = [draw, id, panel_index]() { draw(id, panel_index); };
       if (run_time) {
+        // Find a window of the same kind that is already open, to dock
+        // beside once hello_imgui has created this one.
+        for (const auto &sibling : params->dockingParams.dockableWindows) {
+          if (sibling.label.starts_with(std::string(panels[i].name) + " —") &&
+              sibling.label != window.label) {
+            pending_dock.push_back({window.label, sibling.label});
+            break;
+          }
+        }
         HelloImGui::AddDockableWindow(window, /*forceDockspace=*/true);
       } else {
         params->dockingParams.dockableWindows.push_back(window);
@@ -263,6 +299,78 @@ struct TimelineApp {
                       return view->comparison->id == comparison_id;
                     });
       session.RemoveComparison(comparison_id);
+    }
+    if (!opening_session.empty()) {
+      OpenSession(std::exchange(opening_session, {}));
+    } else if (!want_open_session.empty()) {
+      CloseSession();
+      opening_session = std::exchange(want_open_session, {});
+    }
+  }
+
+  /// Drops every window the current session owns. The windows themselves go
+  /// on the next PreNewFrame, which is why loading waits a frame.
+  void CloseSession() {
+    for (auto &view : views) {
+      RemoveWindows(kSourcePanels, "src", view->source->id);
+    }
+    for (auto &view : comparison_views) {
+      RemoveWindows(kComparisonPanels, "cmp", view->comparison->id);
+    }
+    views.clear();
+    comparison_views.clear();
+    active_source_id = -1;
+  }
+
+  /// Reads a session and gives every restored source and comparison its
+  /// windows back. The restored ids are the saved ones, so the windows come
+  /// back with the identities the layout file remembers and land where they
+  /// were.
+  void OpenSession(const std::string &path) {
+    try {
+      session.LoadFromFile(path);
+    } catch (const std::exception &e) {
+      session_status = std::string("Open failed: ") + e.what();
+      // The old session's views are already gone, so leave an empty one
+      // rather than a half-torn-down window set.
+      session.sources.clear();
+      session.comparisons.clear();
+      AddSourceWindows(*CreateSource(), /*run_time=*/true);
+      return;
+    }
+
+    session_path = path;
+    for (auto &source : session.sources) {
+      views.push_back(std::make_unique<pacer::SourceView>(source.get()));
+      AddSourceWindows(*views.back(), /*run_time=*/true);
+    }
+    for (auto &comparison : session.comparisons) {
+      comparison_views.push_back(
+          std::make_unique<pacer::ComparisonView>(comparison.get()));
+      AddComparisonWindows(*comparison_views.back(), /*run_time=*/true);
+    }
+    if (views.empty()) {
+      AddSourceWindows(*CreateSource(), /*run_time=*/true);
+    } else {
+      active_source_id = views.front()->source->id;
+    }
+    // Opening a session replaces every window, so there is no arrangement
+    // left to preserve -- and rebuilding the layout is the one placement
+    // mechanism that reliably reaches every dockspace. It has to wait until
+    // the added windows are actually in dockingParams.dockableWindows,
+    // which hello_imgui does two PreNewFrames from here; a reset before
+    // that rebuilds the layout without them and leaves them floating.
+    frames_until_layout_reset_ = 3;
+    session_status = std::format("Opened {} ({} sources, {} comparisons).",
+                                 path, views.size(), comparison_views.size());
+  }
+
+  void SaveSession() {
+    try {
+      session.SaveToFile(session_path);
+      session_status = std::format("Saved {}.", session_path);
+    } catch (const std::exception &e) {
+      session_status = std::string("Save failed: ") + e.what();
     }
   }
 
@@ -509,6 +617,23 @@ struct TimelineApp {
       want_new_comparison = true;
     }
     ImGui::Separator();
+
+    // No native file dialog here, so the path is typed. A session file
+    // records the setup -- paths, trims, tracks, which laps each comparison
+    // holds -- and re-reads the recordings on open.
+    ImGui::SetNextItemWidth(280);
+    ImGui::InputText("##session_path", &session_path);
+    if (ImGui::MenuItem("Open session", "Ctrl+O") && !session_path.empty()) {
+      want_open_session = session_path;
+    }
+    if (ImGui::MenuItem("Save session", "Ctrl+S") && !session_path.empty()) {
+      SaveSession();
+    }
+    if (!session_status.empty()) {
+      ImGui::TextDisabled("%s", session_status.c_str());
+    }
+
+    ImGui::Separator();
     if (ImGui::MenuItem("Quit")) {
       params->appShallExit = true;
     }
@@ -588,6 +713,24 @@ struct TimelineApp {
 
   //--------------------------------- FRAME ---------------------------------//
 
+  /// Docks each freshly added window into the node its sibling of the same
+  /// kind occupies. Both windows have to exist in ImGui first, which is a
+  /// frame or two after AddDockableWindow was called; entries whose sibling
+  /// has since gone are dropped rather than retried forever.
+  void ApplyPendingDocking() {
+    std::erase_if(pending_dock, [](const auto &entry) {
+      ImGuiWindow *sibling = ImGui::FindWindowByName(entry.second.c_str());
+      if (!sibling)
+        return true; // the sibling closed; leave the new window where it is
+      if (!ImGui::FindWindowByName(entry.first.c_str()))
+        return false; // not created yet
+      if (sibling->DockId == 0)
+        return true; // the sibling is floating, so there is nothing to join
+      ImGui::DockBuilderDockWindow(entry.first.c_str(), sibling->DockId);
+      return true;
+    });
+  }
+
   void NewFrame() {
     ApplyPendingEdits();
     for (auto &view : views) {
@@ -595,6 +738,12 @@ struct TimelineApp {
     }
     for (auto &view : comparison_views) {
       view->Update();
+    }
+
+    ApplyPendingDocking();
+
+    if (frames_until_layout_reset_ > 0 && --frames_until_layout_reset_ == 0) {
+      params->dockingParams.layoutReset = true;
     }
 
     // Drain finished downloads even when no Map window is drawn, so
@@ -607,6 +756,10 @@ struct TimelineApp {
       want_new_comparison = true;
     } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
       want_new_source = true;
+    } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
+      SaveSession();
+    } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
+      want_open_session = session_path;
     }
   }
 };
@@ -621,12 +774,17 @@ int main(int argc, char **argv) {
   // everything a manual session would click together: data files, the
   // reference track (any .json argument), and the delta lap selection.
   // `--source` starts a further source, so two recordings can be set up
-  // from the shell the same way they would be from the Sources panel.
+  // from the shell the same way they would be from the Sources panel, and
+  // `--session file.json` reopens a saved one.
   std::vector<int> preselected_laps;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--source") {
       source = app.CreateSource()->source;
+    } else if (arg == "--session" && i + 1 < argc) {
+      // Deferred to the first frame so it goes through exactly the same
+      // teardown-and-rebuild the File menu does.
+      app.want_open_session = argv[++i];
     } else if (arg == "--laps" && i + 1 < argc) {
       std::stringstream ss(argv[++i]);
       for (std::string id; std::getline(ss, id, ',');) {
@@ -643,7 +801,8 @@ int main(int argc, char **argv) {
     view->AdoptTrack();
   }
   // `--laps` seeds a comparison from the last source named on the command
-  // line, which is what the flag has always meant.
+  // line, which is what the flag has always meant. A `--session` load
+  // replaces all of this on the first frame.
   if (!preselected_laps.empty()) {
     app.session.Update();
     pacer::ComparisonView *comparison = app.CreateComparison();

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <format>
+#include <stdexcept>
 
 #include <pacer/session/session.hpp>
 
@@ -316,6 +317,59 @@ TEST_CASE("A comparison holds laps from any source on its track",
     REQUIRE(comparison->laps.size() == 1);
     REQUIRE(comparison->laps[0] == pacer::LapRef{same_track->id, 3});
   }
+}
+
+TEST_CASE("A session round-trips through its file", "[session][io]") {
+  pacer::Session session;
+  pacer::Source *source = session.NewSource();
+  source->name = "Morning";
+  REQUIRE(source->LoadTrack("tracks/daytona-milton-keynes.json"));
+  source->track.gate_extension_m = 3.5;
+  source->files.push_back(MakeFile("/does/not/exist.dat", 5, 0));
+  source->files.back().trim_begin = 2;
+  source->files.back().enabled = false;
+
+  pacer::Comparison *comparison = session.NewComparison();
+  comparison->name = "Rear wing";
+
+  const std::string json = session.ToJsonString();
+
+  pacer::Session restored;
+  restored.LoadFromString(json);
+
+  REQUIRE(restored.sources.size() == 1);
+  const pacer::Source &loaded = *restored.sources[0];
+  // Ids are preserved, so the restored windows keep their layout.
+  REQUIRE(loaded.id == source->id);
+  REQUIRE(loaded.name == "Morning");
+  REQUIRE(loaded.track_path == source->track_path);
+  REQUIRE(loaded.HasTrack());
+  REQUIRE(loaded.track.gate_extension_m == 3.5);
+
+  REQUIRE(loaded.files.size() == 1);
+  // The recording is re-read from disk, so a path that has gone comes back
+  // as an entry carrying its error rather than disappearing.
+  REQUIRE(loaded.files[0].path == "/does/not/exist.dat");
+  REQUIRE_FALSE(loaded.files[0].error.empty());
+  REQUIRE(loaded.files[0].trim_begin == 2);
+  REQUIRE_FALSE(loaded.files[0].enabled);
+
+  REQUIRE(restored.comparisons.size() == 1);
+  REQUIRE(restored.comparisons[0]->name == "Rear wing");
+  // The lap it referred to no longer resolves, so it is dropped rather
+  // than restored as a hole.
+  REQUIRE(restored.comparisons[0]->laps.empty());
+
+  // Ids carry on from the highest restored one rather than colliding.
+  REQUIRE(restored.NewSource()->id > loaded.id);
+}
+
+TEST_CASE("A session file that isn't one is refused", "[session][io]") {
+  pacer::Session session;
+  session.NewSource();
+  REQUIRE_THROWS_AS(session.LoadFromString("not json at all"),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(session.LoadFromString("[1, 2, 3]"), std::runtime_error);
 }
 
 TEST_CASE("Lap times read like a timing screen", "[session]") {

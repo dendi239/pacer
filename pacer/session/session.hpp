@@ -240,6 +240,27 @@ struct Session {
 
   void RemoveLap(Comparison *comparison, LapRef ref);
 
+  //------------------------------ PERSISTENCE ------------------------------//
+  //
+  // A session file records what was set up, not what was loaded: the file
+  // paths and their trim windows, the tracks, and which laps each comparison
+  // holds. Reopening re-reads the recordings from disk, so the file stays
+  // small and never goes stale against an edited recording.
+
+  /// Serializes this session to the JSON schema LoadFromString reads.
+  std::string ToJsonString() const;
+
+  /// Replaces this session's contents with `json`. Sources keep the ids they
+  /// were saved with, so a restored session's windows land back where the
+  /// layout file remembers them. Files that no longer exist come back as
+  /// entries carrying their error, rather than vanishing.
+  /// Throws std::runtime_error if the JSON does not parse.
+  void LoadFromString(const std::string &json);
+
+  /// Reads/writes a session file. Throw std::runtime_error on failure.
+  void SaveToFile(const std::string &path) const;
+  void LoadFromFile(const std::string &path);
+
 private:
   int next_source_id_ = 1;
   int next_comparison_id_ = 1;

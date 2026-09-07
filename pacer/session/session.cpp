@@ -2,6 +2,11 @@
 
 #include <algorithm>
 #include <format>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+
+#include <nlohmann/json.hpp>
 
 namespace pacer {
 
@@ -417,6 +422,135 @@ void Session::RemoveLap(Comparison *comparison, LapRef ref) {
     comparison->track = ReferenceTrack{};
     comparison->track_path.clear();
   }
+}
+
+//------------------------------- PERSISTENCE -------------------------------//
+
+namespace {
+constexpr int kSessionSchemaVersion = 1;
+} // namespace
+
+std::string Session::ToJsonString() const {
+  nlohmann::json root;
+  root["version"] = kSessionSchemaVersion;
+
+  for (const auto &source : sources) {
+    nlohmann::json entry;
+    entry["id"] = source->id;
+    entry["name"] = source->name;
+    entry["track"] = source->track_path;
+    entry["gate_extension_m"] = source->track.gate_extension_m;
+    for (const SourceFile &file : source->files) {
+      entry["files"].push_back({{"path", file.path},
+                                {"enabled", file.enabled},
+                                {"trim_begin", file.trim_begin},
+                                {"trim_end", file.trim_end}});
+    }
+    if (!entry.contains("files"))
+      entry["files"] = nlohmann::json::array();
+    root["sources"].push_back(entry);
+  }
+  if (!root.contains("sources"))
+    root["sources"] = nlohmann::json::array();
+
+  for (const auto &comparison : comparisons) {
+    nlohmann::json entry;
+    entry["id"] = comparison->id;
+    entry["name"] = comparison->name;
+    entry["laps"] = nlohmann::json::array();
+    for (LapRef ref : comparison->laps) {
+      entry["laps"].push_back({{"source", ref.source_id},
+                               {"lap", ref.lap_index}});
+    }
+    root["comparisons"].push_back(entry);
+  }
+  if (!root.contains("comparisons"))
+    root["comparisons"] = nlohmann::json::array();
+
+  return root.dump(2);
+}
+
+void Session::LoadFromString(const std::string &json) {
+  nlohmann::json root = nlohmann::json::parse(json, nullptr, false);
+  if (root.is_discarded() || !root.is_object()) {
+    throw std::runtime_error("not a session file");
+  }
+
+  sources.clear();
+  comparisons.clear();
+  next_source_id_ = 1;
+  next_comparison_id_ = 1;
+
+  for (const auto &entry : root.value("sources", nlohmann::json::array())) {
+    auto source = std::make_unique<Source>();
+    source->id = entry.value("id", next_source_id_);
+    source->name = entry.value("name", std::format("Source {}", source->id));
+    next_source_id_ = std::max(next_source_id_, source->id + 1);
+
+    std::string track_path = entry.value("track", std::string());
+    if (!track_path.empty()) {
+      // A missing track leaves the source without laps rather than
+      // failing the whole load; the Track panel says so and offers a
+      // picker.
+      source->LoadTrack(track_path);
+      source->track.gate_extension_m =
+          entry.value("gate_extension_m", source->track.gate_extension_m);
+      source->track_path = track_path;
+    }
+
+    for (const auto &file_entry :
+         entry.value("files", nlohmann::json::array())) {
+      source->AddFile(file_entry.value("path", std::string()));
+      SourceFile &file = source->files.back();
+      file.enabled = file_entry.value("enabled", true);
+      file.trim_begin = file_entry.value("trim_begin", (size_t)0);
+      file.trim_end = file_entry.value("trim_end", (size_t)0);
+    }
+    sources.push_back(std::move(source));
+  }
+
+  // Sources have to be rebuilt before the comparisons refer to their laps:
+  // AddLap checks that the lap index exists.
+  Update();
+
+  for (const auto &entry :
+       root.value("comparisons", nlohmann::json::array())) {
+    auto comparison = std::make_unique<Comparison>();
+    comparison->id = entry.value("id", next_comparison_id_);
+    comparison->name =
+        entry.value("name", std::format("Comparison {}", comparison->id));
+    next_comparison_id_ = std::max(next_comparison_id_, comparison->id + 1);
+    comparisons.push_back(std::move(comparison));
+
+    for (const auto &lap : entry.value("laps", nlohmann::json::array())) {
+      // Laps that no longer exist -- a retrimmed or missing recording is
+      // shorter than it was -- are dropped rather than restored as holes.
+      AddLap(comparisons.back().get(),
+             LapRef{.source_id = lap.value("source", -1),
+                    .lap_index = lap.value("lap", -1)});
+    }
+  }
+}
+
+void Session::SaveToFile(const std::string &path) const {
+  std::ofstream out(path);
+  if (!out) {
+    throw std::runtime_error("could not write " + path);
+  }
+  out << ToJsonString();
+  if (!out) {
+    throw std::runtime_error("could not write " + path);
+  }
+}
+
+void Session::LoadFromFile(const std::string &path) {
+  std::ifstream in(path);
+  if (!in) {
+    throw std::runtime_error("could not read " + path);
+  }
+  std::stringstream buffer;
+  buffer << in.rdbuf();
+  LoadFromString(buffer.str());
 }
 
 bool Session::Update() {
