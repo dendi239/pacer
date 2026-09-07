@@ -15,7 +15,7 @@ SourceView::SourceView(Source *source) : source{source} {
   display.laps = &source->laps;
   track_picker_.path = source->track_path;
   if (source->HasTrack()) {
-    ApplyTrack();
+    AdoptTrack();
   }
 }
 
@@ -28,8 +28,9 @@ void SourceView::Update() {
   }
 }
 
-void SourceView::ApplyTrack() {
+void SourceView::AdoptTrack() {
   const ReferenceTrack &track = source->track;
+  track_picker_.path = source->track_path;
   if (track.segments.empty()) {
     track_status_ = "Track has no segments.";
     return;
@@ -69,7 +70,7 @@ void SourceView::DrawTrackPanel() {
   if (load) {
     std::string error;
     if (source->LoadTrack(track_picker_.path, &error)) {
-      ApplyTrack();
+      AdoptTrack();
     } else {
       track_status_ = "Error: " + error;
     }

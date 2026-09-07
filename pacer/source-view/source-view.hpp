@@ -42,11 +42,12 @@ struct SourceView {
   /// Lap and sector times.
   void DrawLapTablePanel();
 
-private:
-  /// Adopts the track's coordinate system as the map frame and notes the
-  /// track's shape in `track_status_`.
-  void ApplyTrack();
+  /// Adopts the source's track: its coordinate system becomes the map frame.
+  /// The constructor does this already; call it again after loading a track
+  /// into the source from outside this view (e.g. from the command line).
+  void AdoptTrack();
 
+private:
   TrackFilePicker track_picker_;
   std::string track_status_;
 
