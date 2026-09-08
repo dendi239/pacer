@@ -1,5 +1,7 @@
 #include "track-picker.hpp"
 
+#include "file-dialog.hpp"
+
 #include <algorithm>
 #include <filesystem>
 
@@ -17,6 +19,12 @@ void pacer::TrackFilePicker::Refresh() {
   }
   std::sort(entries_.begin(), entries_.end());
   scanned_ = true;
+}
+
+const std::vector<std::string> &pacer::TrackFilePicker::Entries() {
+  if (!scanned_)
+    Refresh();
+  return entries_;
 }
 
 bool pacer::TrackFilePicker::Draw(const char *id) {
@@ -54,8 +62,31 @@ bool pacer::TrackFilePicker::Draw(const char *id) {
   if (ImGui::Button("Refresh")) {
     Refresh();
   }
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##path", &path);
+
+  // The combo only sees `directory`; a track kept anywhere else is reached
+  // through the dialog, and typing a path stays as the fallback where there
+  // is no dialog to put up.
+  if (HasNativeFileDialog()) {
+    if (ImGui::Button("Browse...")) {
+      std::string chosen = OpenFileDialog(
+          "Open a reference track", {{"Reference tracks", {"json"}}},
+          path.empty() ? directory : path);
+      if (!chosen.empty()) {
+        path = chosen;
+        picked = true;
+      }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", path.empty()
+                                  ? "no track"
+                                  : std::filesystem::path(path)
+                                        .filename()
+                                        .string()
+                                        .c_str());
+  } else {
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##path", &path);
+  }
 
   ImGui::PopID();
   return picked;

@@ -53,6 +53,20 @@ struct SourceView {
   /// stale head, a dropout, or a clip boundary landing mid-lap is visible.
   void DrawSamplesPanel();
 
+  //-------------------------------- MENUS ----------------------------------//
+  //
+  // The menu-bar half of the Track and Files panels: the actions, without
+  // the readouts. A source's window carries both, so a track can be swapped
+  // or a clip added without the matching panel being open.
+
+  /// Contents of a "Track" menu: the tracks found next to the app, a
+  /// browse item, and the gate extension. Call between BeginMenu/EndMenu.
+  void DrawTrackMenu();
+
+  /// Contents of a "Files" menu: add recordings, and one submenu per file
+  /// with what its panel row offers (enable, trim, reorder, remove).
+  void DrawFilesMenu();
+
   /// Adopts the source's track: its coordinate system becomes the map frame.
   /// The constructor does this already; call it again after loading a track
   /// into the source from outside this view (e.g. from the command line).
@@ -62,6 +76,15 @@ private:
   /// The per-file head/tail handles on the samples plot. `origin_s` is the
   /// source's first sample time, i.e. what the plot's x axis counts from.
   void DrawTrimHandles(double origin_s);
+
+  /// Loads `path` into the source, reporting either way in the panel's
+  /// status line.
+  void AddFile(const std::string &path);
+
+  /// Loads a reference track and adopts its frame, reporting a failure in
+  /// the track panel's status line. Also makes it the picker's selection,
+  /// so the panel and the menu agree on what is loaded.
+  void LoadTrackPath(const std::string &path);
 
   /// Makes the item just submitted a drag source carrying `lap`.
   void LapDragSource(int lap);

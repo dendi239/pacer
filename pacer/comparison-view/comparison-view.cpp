@@ -37,6 +37,26 @@ std::optional<pacer::GPSSample> SampleAtDistance(const pacer::Lap &lap,
   return pacer::Interpolate(lap.points[i - 1], lap.points[i], t);
 }
 
+// Interpolated value from a per-point series that runs alongside `lap`, at
+// distance `d` on the lap's own distance axis. `values` may be shorter than
+// the lap (the lateral series stops at the last gate), so the search is
+// bounded by it rather than by the lap.
+std::optional<double> ValueAtDistance(const pacer::Lap &lap,
+                                      const std::vector<double> &values,
+                                      double d) {
+  const auto &dist = lap.cum_distances;
+  size_t count = std::min(values.size(), dist.size());
+  if (count < 2 || d < dist.front() || d > dist[count - 1]) {
+    return std::nullopt;
+  }
+  auto begin = dist.begin();
+  size_t i = std::lower_bound(begin, begin + count, d) - begin;
+  i = std::max<size_t>(i, 1);
+  double span = dist[i] - dist[i - 1];
+  double t = span > 0 ? (d - dist[i - 1]) / span : 0.0;
+  return values[i - 1] * (1 - t) + values[i] * t;
+}
+
 // Time lost/gained by `lap` versus `best` at distance `d` along the best
 // lap, interpolated the same way the delta plot renders it (both laps are
 // resampled against the same gates, so equal indices are comparable).
@@ -176,7 +196,50 @@ void ComparisonView::Update() {
   adopted_track_path_ = comparison->track_path;
   cs = comparison->track.cs;
   map_needs_fit_ = true;
+  RebuildGateFrames();
   Invalidate();
+}
+
+void ComparisonView::RebuildGateFrames() {
+  gate_frames_.clear();
+  if (!comparison->HasTrack()) {
+    return;
+  }
+
+  auto to_local = [&](const Point &ref_local) {
+    Vec3f p = cs.Local(
+        comparison->track.cs.Global(Vec3f{ref_local.x, ref_local.y, 0}));
+    return Point{p[0], p[1]};
+  };
+
+  std::vector<Segment> gates = comparison->track.DensifiedGates();
+  size_t n = gates.size();
+  if (n < 2) {
+    return;
+  }
+
+  gate_frames_.resize(n);
+  for (size_t k = 0; k < n; ++k) {
+    Point a = to_local(gates[k].first), b = to_local(gates[k].second);
+    gate_frames_[k].mid = (a + b) / 2.0;
+    // TimingLine() pushed both ends out by gate_extension_m so the gates
+    // still catch a lap running wide; the drawn boundary is the annotated
+    // width, so take the extension back off here.
+    gate_frames_[k].half_width =
+        std::max(0.0, std::sqrt((b - a).Norm()) / 2.0 -
+                          comparison->track.gate_extension_m);
+  }
+
+  // Left of the direction of travel, so the sign means the same thing all
+  // the way round however the annotator happened to order each gate's ends.
+  // The densified gates close the loop, so gate n-1 looks forward to gate 0.
+  for (size_t k = 0; k < n; ++k) {
+    Point forward = gate_frames_[(k + 1) % n].mid - gate_frames_[k].mid;
+    double length = std::sqrt(forward.Norm());
+    gate_frames_[k].left =
+        length > 1e-9 ? (forward / length).Rot()
+                      : (k > 0 ? gate_frames_[k - 1].left : Point{0, 1});
+  }
 }
 
 void ComparisonView::SetHoverDistance(double distance) {
@@ -214,6 +277,63 @@ void ComparisonView::RefreshResampled(const Session &session) {
       best_slot_ = (int)slot;
       best_time = time;
     }
+  }
+
+  // A comparison built from a session file has its track before any view
+  // asks for it, so the adoption in Update() is a no-op; build the frames
+  // here too rather than leave the track-position trace empty.
+  if (gate_frames_.empty()) {
+    RebuildGateFrames();
+  }
+  RefreshLateral();
+}
+
+void ComparisonView::RefreshLateral() {
+  lateral_.assign(resampled_.size(), {});
+  edge_distance_.clear();
+  edge_left_.clear();
+  edge_right_.clear();
+  if (gate_frames_.empty()) {
+    return;
+  }
+
+  for (size_t slot = 0; slot < resampled_.size(); ++slot) {
+    const Lap &lap = resampled_[slot];
+    // Resample() puts point k on gate k, and closes a complete lap with one
+    // extra point that belongs to no gate -- hence the min().
+    size_t count = std::min(lap.points.size(), gate_frames_.size());
+    lateral_[slot].reserve(count);
+    for (size_t k = 0; k < count; ++k) {
+      Vec3f p = cs.Local(lap.points[k]);
+      lateral_[slot].push_back((Point{p[0], p[1]} - gate_frames_[k].mid)
+                                   .Scalar(gate_frames_[k].left));
+    }
+  }
+
+  // The edges are drawn against the same x-axis as the traces, so sample
+  // them along whichever lap's distances the traces are plotted on.
+  int reference = best_slot_;
+  if (reference < 0) {
+    for (size_t slot = 0; slot < resampled_.size(); ++slot) {
+      if (resampled_[slot].Count() > 0) {
+        reference = (int)slot;
+        break;
+      }
+    }
+  }
+  if (reference < 0) {
+    return;
+  }
+  const Lap &lap = resampled_[reference];
+  size_t count = std::min(
+      {lap.points.size(), lap.cum_distances.size(), gate_frames_.size()});
+  edge_distance_.reserve(count);
+  edge_left_.reserve(count);
+  edge_right_.reserve(count);
+  for (size_t k = 0; k < count; ++k) {
+    edge_distance_.push_back(lap.cum_distances[k]);
+    edge_left_.push_back(gate_frames_[k].half_width);
+    edge_right_.push_back(-gate_frames_[k].half_width);
   }
 }
 
@@ -261,6 +381,82 @@ LapRef ComparisonView::DrawLapChips(const Session &session) {
     ImGui::PopID();
   }
   return dropped;
+}
+
+//--------------------------------- MENU ------------------------------------//
+
+void ComparisonView::DrawLapsMenu(Session &session) {
+  if (ImGui::BeginMenu("Add lap")) {
+    for (const auto &source : session.sources) {
+      if (!ImGui::BeginMenu(source->name.c_str()))
+        continue;
+      if (source->LapsCount() == 0) {
+        ImGui::TextDisabled("no laps");
+      }
+      for (int lap = 0; lap < (int)source->LapsCount(); ++lap) {
+        LapRef ref{.source_id = source->id, .lap_index = lap};
+        std::string reason = session.WhyNotAddable(*comparison, ref);
+        bool held = comparison->Contains(ref);
+        std::string label = std::format(
+            "{}  {}", ref.Label(), FormatLapTime(source->laps.LapTime(lap)));
+        ImGui::BeginDisabled(!reason.empty() || held);
+        if (ImGui::MenuItem(label.c_str(), nullptr, held)) {
+          if (session.AddLap(comparison, ref))
+            Invalidate();
+        }
+        ImGui::EndDisabled();
+        // A disabled item still reports hover, which is the only place
+        // there is room to say why the lap was refused.
+        if (!reason.empty() &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+          ImGui::SetTooltip("%s", reason.c_str());
+        }
+      }
+      ImGui::EndMenu();
+    }
+    if (session.sources.empty()) {
+      ImGui::TextDisabled("no sources");
+    }
+    ImGui::EndMenu();
+  }
+
+  ImGui::Separator();
+  if (comparison->laps.empty()) {
+    ImGui::TextDisabled("no laps yet -- drag one in, or use Add lap");
+    return;
+  }
+
+  LapRef remove;
+  for (int slot = 0; slot < (int)comparison->laps.size(); ++slot) {
+    LapRef ref = comparison->laps[slot];
+    ImGui::PushID(slot);
+    ImVec4 color = LapColor(slot);
+    ImGui::ColorButton(
+        "##color", color,
+        ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+        ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()));
+    ImGui::SameLine();
+    std::optional<Lap> lap = session.ResolveLap(ref);
+    std::string label =
+        lap ? std::format("{}  {}", ref.Label(), FormatLapTime(lap->LapTime()))
+            : std::format("{}  (gone)", ref.Label());
+    if (ImGui::MenuItem(label.c_str(), "Remove")) {
+      remove = ref;
+    }
+    ImGui::PopID();
+  }
+  if (remove.Valid()) {
+    session.RemoveLap(comparison, remove);
+    Invalidate();
+  }
+
+  ImGui::Separator();
+  if (ImGui::MenuItem("Remove all laps")) {
+    while (!comparison->laps.empty()) {
+      session.RemoveLap(comparison, comparison->laps.back());
+    }
+    Invalidate();
+  }
 }
 
 //------------------------------ SPEED / DELTA ------------------------------//
@@ -320,7 +516,15 @@ void ComparisonView::Display(Session &session) {
 
   const int slots = (int)resampled_.size();
 
-  if (ImPlot::BeginSubplots("", 2, 1, ImVec2(-1, -1),
+  ImGui::Checkbox("Track position", &show_track_position);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
+    ImGui::SetTooltip("Where each lap sits across the track's width:\n"
+                      "positive is left of the direction of travel, and the\n"
+                      "grey lines are the annotated track edges.");
+  }
+
+  const int rows = show_track_position ? 3 : 2;
+  if (ImPlot::BeginSubplots("", rows, 1, ImVec2(-1, -1),
                             ImPlotSubplotFlags_LinkAllX)) {
     if (plots_need_fit_) {
       ImPlot::SetNextAxesToFit();
@@ -363,6 +567,11 @@ void ComparisonView::Display(Session &session) {
       ImPlot::SetNextAxesToFit();
     }
     if (ImPlot::BeginPlot("Delta", ImVec2(), ImPlotFlags_NoTitle)) {
+      // Only the bottom plot of the stack carries the distance labels; the
+      // axes are linked, so repeating them mid-stack is just noise.
+      if (show_track_position) {
+        ImPlot::SetupAxis(ImAxis_X1, "", ImPlotAxisFlags_NoTickLabels);
+      }
       if (best_slot_ != -1) {
         const Lap &best_lap = resampled_[best_slot_];
 
@@ -408,6 +617,67 @@ void ComparisonView::Display(Session &session) {
       }
       ImPlot::EndPlot();
     }
+    if (show_track_position) {
+      if (plots_need_fit_) {
+        ImPlot::SetNextAxesToFit();
+      }
+      if (ImPlot::BeginPlot("Track position", ImVec2(), ImPlotFlags_NoTitle)) {
+        ImPlot::SetupAxis(ImAxis_Y1, "m from centre");
+
+        // The boundaries first, so the traces draw over them: the whole
+        // point of the plot is reading a line against the track's edges.
+        if (edge_distance_.size() >= 2) {
+          ImVec4 edge_color(1.0f, 1.0f, 1.0f, 0.35f);
+          ImPlot::SetNextLineStyle(edge_color, 1.5f);
+          ImPlot::PlotLine("edge", edge_distance_.data(), edge_left_.data(),
+                           (int)edge_distance_.size());
+          ImPlot::SetNextLineStyle(edge_color, 1.5f);
+          ImPlot::PlotLine("edge", edge_distance_.data(), edge_right_.data(),
+                           (int)edge_distance_.size());
+          double centre = 0;
+          ImPlot::SetNextLineStyle(ImVec4(1.0f, 1.0f, 1.0f, 0.15f), 1.0f);
+          ImPlot::PlotInfLines("##centre", &centre, 1,
+                               ImPlotInfLinesFlags_Horizontal);
+        }
+
+        for (int slot = 0; slot < slots; ++slot) {
+          const Lap &lap = resampled_[slot];
+          const std::vector<double> &offsets = lateral_[slot];
+          int count = (int)std::min(offsets.size(), lap.cum_distances.size());
+          if (count <= 0)
+            continue;
+          std::pair<const Lap *, const std::vector<double> *> data{&lap,
+                                                                   &offsets};
+          ImPlot::SetNextLineStyle(LapColor(slot));
+          ImPlot::PlotLineG(
+              comparison->laps[slot].Label().c_str(),
+              [](int index, void *data) -> ImPlotPoint {
+                auto [lap, offsets] = *(
+                    std::pair<const Lap *, const std::vector<double> *> *)data;
+                return ImPlotPoint{lap->cum_distances[index],
+                                   (*offsets)[index]};
+              },
+              &data, count);
+        }
+
+        if (auto d = HoverDistance()) {
+          plot_cursor(*d);
+          for (int slot = 0; slot < slots; ++slot) {
+            if (auto offset =
+                    ValueAtDistance(resampled_[slot], lateral_[slot], *d)) {
+              ImPlot::Annotation(*d, *offset, LapColor(slot),
+                                 annotation_offset(slot), true, "%+.2fm",
+                                 *offset);
+            }
+          }
+        }
+        if (ImPlot::IsPlotHovered()) {
+          SetHoverDistance(ImPlot::GetPlotMousePos().x);
+        }
+        ImPlot::EndPlot();
+      }
+    }
+
     plots_need_fit_ = false;
     ImPlot::EndSubplots();
   }

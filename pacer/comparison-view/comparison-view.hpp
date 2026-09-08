@@ -28,6 +28,10 @@ struct ComparisonView {
   bool show_satellite = true;
   bool show_reference_track = true;
 
+  /// Whether the telemetry subplots include the track-position trace: where
+  /// each lap sits across the track's width, against the track edges.
+  bool show_track_position = true;
+
   /// Colour of the lap in slot `index` of the comparison. Keyed by position
   /// rather than by lap id, so the first lap dropped in is always the first
   /// colour however the laps were numbered.
@@ -46,6 +50,13 @@ struct ComparisonView {
   /// The lap chips and the speed/delta plots. Accepts lap drops anywhere in
   /// the window.
   void Display(Session &session);
+
+  /// Contents of a "Laps" menu: every source's laps offered for adding
+  /// (with the reason a refused one cannot join), and the laps already
+  /// held, for removing. Drag and drop is the quick path; this is the one
+  /// that works without both windows being on screen at once.
+  /// Call between BeginMenu/EndMenu.
+  void DrawLapsMenu(Session &session);
 
   /// Fits the plot axes to the reference track once per track change.
   /// Call right after ImPlot::BeginPlot.
@@ -77,10 +88,39 @@ private:
   /// from the comparison (or an invalid LapRef).
   LapRef DrawLapChips(const Session &session);
 
+  /// Rebuilds gate_frames_ from the adopted track. Called on track change.
+  void RebuildGateFrames();
+
+  /// Recomputes lateral_ and the track edges from the current resampling.
+  void RefreshLateral();
+
   /// Laps resampled against the comparison's track, in the same order, so a
   /// lap's slot indexes both `comparison->laps` and this.
   std::vector<Lap> resampled_;
   int resample_frame_ = -1;
+
+  /// One per densified gate, in `cs` local meters: where the gate's middle
+  /// is, the unit vector pointing left of the direction of travel, and half
+  /// the annotated track width there (the gate minus its TimingLine
+  /// extension). Resample() puts a lap's point k on gate k, so this turns
+  /// that point into a signed offset across the track.
+  struct GateFrame {
+    Point mid;
+    Point left;
+    double half_width = 0;
+  };
+  std::vector<GateFrame> gate_frames_;
+
+  /// Signed distance from the track's middle line, in meters, positive to
+  /// the left of the direction of travel. lateral_[slot][k] goes with
+  /// resampled_[slot].points[k]; it stops at the last gate, so it can be
+  /// shorter than the lap.
+  std::vector<std::vector<double>> lateral_;
+
+  /// The track edges sampled along the best lap's distance axis, so the
+  /// track-position plot shows the offsets against the boundaries they are
+  /// offsets from. Rebuilt with the resampling.
+  std::vector<double> edge_distance_, edge_left_, edge_right_;
 
   /// Slot of the quickest lap; -1 when there is none. Its cum_distances
   /// define the delta plot's x-axis / hover distance domain.

@@ -18,6 +18,10 @@ struct TrackFilePicker {
 
   void Refresh();
 
+  /// The .json files found in `directory`, scanning it on first use. What
+  /// the combo lists, exposed so a menu can offer the same set of tracks.
+  const std::vector<std::string> &Entries();
+
 private:
   std::vector<std::string> entries_; // full paths, sorted
   bool scanned_ = false;

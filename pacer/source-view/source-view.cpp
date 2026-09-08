@@ -8,6 +8,8 @@
 #include <limits>
 #include <vector>
 
+#include <pacer/ui/file-dialog.hpp>
+
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "implot.h"
@@ -71,12 +73,7 @@ void SourceView::DrawTrackPanel() {
   }
 
   if (load) {
-    std::string error;
-    if (source->LoadTrack(track_picker_.path, &error)) {
-      AdoptTrack();
-    } else {
-      track_status_ = "Error: " + error;
-    }
+    LoadTrackPath(track_picker_.path);
   }
 
   if (!track_status_.empty()) {
@@ -85,6 +82,70 @@ void SourceView::DrawTrackPanel() {
   if (source->laps.PointCount() > 0 && !source->HasTrack()) {
     ImGui::TextWrapped(
         "Load a reference track to split the data into laps and sectors.");
+  }
+}
+
+void SourceView::LoadTrackPath(const std::string &path) {
+  if (path.empty())
+    return;
+  std::string error;
+  if (source->LoadTrack(path, &error)) {
+    track_picker_.path = path;
+    track_status_.clear();
+    AdoptTrack();
+  } else {
+    track_status_ = "Error: " + error;
+  }
+}
+
+void SourceView::DrawTrackMenu() {
+  for (const std::string &entry : track_picker_.Entries()) {
+    std::string label = std::filesystem::path(entry).stem().string();
+    if (ImGui::MenuItem(label.c_str(), nullptr, entry == source->track_path)) {
+      LoadTrackPath(entry);
+    }
+  }
+  if (track_picker_.Entries().empty()) {
+    ImGui::TextDisabled("No tracks in '%s'", track_picker_.directory.c_str());
+  }
+  if (ImGui::MenuItem("Rescan")) {
+    track_picker_.Refresh();
+  }
+
+  ImGui::Separator();
+  if (HasNativeFileDialog()) {
+    if (ImGui::MenuItem("Open track...")) {
+      std::string chosen = OpenFileDialog(
+          "Open a reference track", {{"Reference tracks", {"json"}}},
+          track_picker_.path.empty() ? track_picker_.directory
+                                     : track_picker_.path);
+      LoadTrackPath(chosen);
+    }
+  } else {
+    ImGui::SetNextItemWidth(260);
+    if (ImGui::InputText("##track_path", &track_picker_.path,
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+      LoadTrackPath(track_picker_.path);
+    }
+  }
+
+  // The gate extension belongs with the track: it is what decides whether a
+  // lap run wide still counts as having crossed the line.
+  ImGui::Separator();
+  ImGui::SetNextItemWidth(160);
+  float extension = static_cast<float>(source->track.gate_extension_m);
+  if (ImGui::SliderFloat("Gate extension (m)", &extension, 0.0f, 10.0f,
+                         "%.1f")) {
+    source->track.gate_extension_m = extension;
+    source->TrackChanged();
+  }
+
+  if (!track_status_.empty()) {
+    ImGui::TextDisabled("%s", track_status_.c_str());
+  } else if (source->HasTrack()) {
+    ImGui::TextDisabled("%zu laps", source->LapsCount());
+  } else {
+    ImGui::TextDisabled("no track loaded");
   }
 }
 
@@ -119,23 +180,49 @@ std::string FormatDuration(int64_t ms) {
   return std::format("{}:{:02}.{:03}", total_s / 60, total_s % 60, ms % 1000);
 }
 
+// What the "add a recording" dialog offers: GoPro clips carry the telemetry
+// in the video container, the receiver's own logs are .dat.
+const std::vector<FileDialogFilter> kRecordingFilters = {
+    {"Recordings", {"mp4", "dat"}},
+};
+
 } // namespace
 
+void SourceView::AddFile(const std::string &path) {
+  std::string error;
+  if (source->AddFile(path, &error)) {
+    files_status_ = std::format(
+        "Loaded {} samples from {}.", source->files.back().samples.size(),
+        std::filesystem::path(path).filename().string());
+  } else {
+    files_status_ = error;
+  }
+}
+
 void SourceView::DrawFilesPanel() {
-  ImGui::SetNextItemWidth(-90);
-  bool submitted = ImGui::InputTextWithHint(
-      "##new_file", "path to a .MP4 or .dat recording", &pending_path_,
-      ImGuiInputTextFlags_EnterReturnsTrue);
-  ImGui::SameLine();
-  if ((ImGui::Button("Add file") || submitted) && !pending_path_.empty()) {
-    std::string error;
-    if (source->AddFile(pending_path_, &error)) {
-      files_status_ = std::format("Loaded {} samples from {}.",
-                                  source->files.back().samples.size(),
-                                  pending_path_);
-      pending_path_.clear();
-    } else {
-      files_status_ = error;
+  if (HasNativeFileDialog()) {
+    // The dialog takes several files at once: a GoPro run arrives as a run
+    // of clips, and picking them one at a time is the common case made
+    // tedious.
+    if (ImGui::Button("Add files...")) {
+      for (const std::string &path : OpenFilesDialog(
+               "Add recordings to this source", kRecordingFilters,
+               source->files.empty() ? std::string{}
+                                     : source->files.back().path)) {
+        AddFile(path);
+      }
+    }
+  } else {
+    ImGui::SetNextItemWidth(-90);
+    bool submitted = ImGui::InputTextWithHint(
+        "##new_file", "path to a .MP4 or .dat recording", &pending_path_,
+        ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button("Add file") || submitted) && !pending_path_.empty()) {
+      size_t before = source->files.size();
+      AddFile(pending_path_);
+      if (source->files.size() != before)
+        pending_path_.clear();
     }
   }
 
@@ -255,6 +342,108 @@ void SourceView::DrawFilesPanel() {
               source->LapsCount());
   if (!files_status_.empty()) {
     ImGui::TextWrapped("%s", files_status_.c_str());
+  }
+}
+
+void SourceView::DrawFilesMenu() {
+  if (HasNativeFileDialog()) {
+    if (ImGui::MenuItem("Add recordings...")) {
+      for (const std::string &path : OpenFilesDialog(
+               "Add recordings to this source", kRecordingFilters,
+               source->files.empty() ? std::string{}
+                                     : source->files.back().path)) {
+        AddFile(path);
+      }
+    }
+  } else {
+    ImGui::SetNextItemWidth(260);
+    if (ImGui::InputTextWithHint("##new_file", "path to a .MP4 or .dat",
+                                 &pending_path_,
+                                 ImGuiInputTextFlags_EnterReturnsTrue) &&
+        !pending_path_.empty()) {
+      size_t before = source->files.size();
+      AddFile(pending_path_);
+      if (source->files.size() != before)
+        pending_path_.clear();
+    }
+  }
+
+  if (source->files.empty()) {
+    ImGui::TextDisabled("No files yet");
+    return;
+  }
+
+  ImGui::Separator();
+
+  // Same edits the Files panel offers, one submenu per file. Deferred the
+  // same way the panel defers them: removing or moving a file mid-loop
+  // would invalidate what the loop is walking.
+  int remove_index = -1;
+  int move_index = -1, move_delta = 0;
+
+  for (int i = 0; i < (int)source->files.size(); ++i) {
+    SourceFile &file = source->files[i];
+    ImGui::PushID(i);
+    std::string label = std::filesystem::path(file.path).filename().string();
+    if (ImGui::BeginMenu(label.c_str())) {
+      if (ImGui::MenuItem("Enabled", nullptr, file.enabled)) {
+        file.enabled = !file.enabled;
+        source->MarkDirty();
+      }
+      ImGui::BeginDisabled(file.samples.empty());
+      if (ImGui::MenuItem("Auto-trim")) {
+        size_t trimmed = source->AutoTrim(i);
+        files_status_ =
+            trimmed ? std::format("Auto-trim dropped {} samples from {}.",
+                                  trimmed, label)
+                    : "Auto-trim found nothing to drop.";
+      }
+      if (ImGui::MenuItem("Reset trim")) {
+        file.trim_begin = 0;
+        file.trim_end = 0;
+        source->MarkDirty();
+      }
+      ImGui::EndDisabled();
+      if (ImGui::MenuItem("Reload")) {
+        std::string error;
+        if (!source->ReloadFile(i, &error))
+          files_status_ = error;
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Move up", nullptr, false, i > 0)) {
+        move_index = i;
+        move_delta = -1;
+      }
+      if (ImGui::MenuItem("Move down", nullptr, false,
+                          i + 1 < (int)source->files.size())) {
+        move_index = i;
+        move_delta = 1;
+      }
+      if (ImGui::MenuItem("Remove")) {
+        remove_index = i;
+      }
+      ImGui::Separator();
+      if (file.error.empty()) {
+        ImGui::TextDisabled("%zu of %zu samples kept", file.UsedCount(),
+                            file.samples.size());
+      } else {
+        ImGui::TextDisabled("%s", file.error.c_str());
+      }
+      ImGui::EndMenu();
+    }
+    ImGui::PopID();
+  }
+
+  if (move_index >= 0)
+    source->MoveFile(move_index, move_delta);
+  if (remove_index >= 0)
+    source->RemoveFile(remove_index);
+
+  ImGui::Separator();
+  ImGui::TextDisabled("%zu samples in %zu laps", source->UsedSampleCount(),
+                      source->LapsCount());
+  if (!files_status_.empty()) {
+    ImGui::TextDisabled("%s", files_status_.c_str());
   }
 }
 

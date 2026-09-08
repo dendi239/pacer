@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <array>
 #include <format>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -25,83 +27,114 @@
 #include <pacer/map-tiles/tile-store.hpp>
 #include <pacer/session/session.hpp>
 #include <pacer/source-view/source-view.hpp>
+#include <pacer/ui/file-dialog.hpp>
 #include <pacer/ui/theme.hpp>
 
 namespace {
 
-// One dockspace per kind of view, so the windows a second source brings
-// become tabs next to the first source's -- adding a source never splits the
-// layout further.
+// Sessions are JSON, and the dialogs say so rather than showing the whole
+// disk.
+const std::vector<pacer::FileDialogFilter> kSessionFilters = {
+    {"Sessions", {"json"}},
+};
+
+// Everything about one source, or one comparison, lives in that owner's own
+// window: its panels are docked inside it, and the actions that apply to it
+// are in its menu bar. So the app-level layout is only ever "which sources
+// and comparisons are on screen", however many panels each of them shows.
 //
-//   +----------------+---------------------------+---------------+
-//   | Sources        |  Map (S1) | Map (S2)       | Delta         |
-//   +----------------+                            |               |
-//   | Track (S1|S2)  |                            +---------------+
-//   +----------------+---------------------------+ Comparison Map|
-//   | Files (S1|S2)  | Lap chart    | Lap table   | Lap Telemetry |
-//   +----------------+--------------+-------------+---------------+
+//   +-- Source 1 -- Source 2 --------------+-- Comparison 1 -------------+
+//   | Source  Track  Files  View           | Comparison  Laps  View      |
+//   +--------+-----------------------------+-----------------------------+
+//   | Track  |  Map | Samples              |  Delta        |  Map        |
+//   | -------|                             |               |             |
+//   | Files  +--------------+--------------+               |             |
+//   |        | Lap chart    | Lap table    |               |             |
+//   +--------+--------------+--------------+---------------+-------------+
 HelloImGui::DockingParams CreateDefaultLayout() {
   HelloImGui::DockingParams result;
+  // Sources on the left, comparisons on the right: the arrangement you want
+  // while reading a delta against the run it came from.
   result.dockingSplits = {
-      HelloImGui::DockingSplit{"MainDockSpace", "LeftSpace", ImGuiDir_Left,
-                               0.23f},
-      HelloImGui::DockingSplit{"MainDockSpace", "RightSpace", ImGuiDir_Right,
-                               0.30f},
-      // What is left of MainDockSpace is the map.
-      HelloImGui::DockingSplit{"MainDockSpace", "DataSpace", ImGuiDir_Down,
-                               0.35f},
-      HelloImGui::DockingSplit{"DataSpace", "TableSpace", ImGuiDir_Right, 0.5f},
-      // The top of LeftSpace stays the source list.
-      HelloImGui::DockingSplit{"LeftSpace", "TrackSpace", ImGuiDir_Down, 0.72f},
-      HelloImGui::DockingSplit{"TrackSpace", "FilesSpace", ImGuiDir_Down, 0.6f},
-      HelloImGui::DockingSplit{"RightSpace", "CompMapSpace", ImGuiDir_Down,
-                               0.5f}};
+      HelloImGui::DockingSplit{"MainDockSpace", "ComparisonSpace",
+                               ImGuiDir_Right, 0.42f}};
   return result;
 }
 
-// The per-source panels, in the order they are created. Kept as data so the
-// windows, the View menu and the teardown all walk the same list.
-struct PanelSpec {
-  const char *name;
-  const char *dock_space;
-};
+//------------------------------- PANEL LISTS -------------------------------//
+//
+// The panels each kind of owner brings, in the order the View menu lists
+// them. Kept as data so the windows, the menu and the nested default layout
+// all walk the same list.
 
-constexpr PanelSpec kSourcePanels[] = {
-    {"Track", "TrackSpace"},     {"Files", "FilesSpace"},
-    {"Map", "MainDockSpace"},    {"Samples", "MainDockSpace"},
-    {"Lap chart", "DataSpace"},  {"Lap table", "TableSpace"},
+constexpr const char *kSourcePanels[] = {
+    "Map", "Samples", "Lap chart", "Lap table", "Telemetry", "Track", "Files",
 };
+constexpr const char *kComparisonPanels[] = {"Delta", "Map"};
 
-// The panels a comparison brings, same idea.
-constexpr PanelSpec kComparisonPanels[] = {
-    {"Delta", "RightSpace"},
-    {"Comparison map", "CompMapSpace"},
-};
+// Fits both lists; OwnerUi keeps its visibility flags inline rather than
+// heap-allocating one vector<bool> per source.
+constexpr size_t kMaxPanels = 8;
+
+// Owner kinds, as they appear in window identities. Sources and comparisons
+// number from 1 independently, so the kind is part of the identity.
+constexpr const char *kSourceKind = "src";
+constexpr const char *kComparisonKind = "cmp";
 
 // A window's ImGui identity: everything after "###". Stays put while the
 // visible part of the label follows the owner's name, so renaming a source
-// or comparison relabels its tabs without ImGui treating them as new
-// windows (and losing where they were docked). `owner` distinguishes the
-// source and comparison id spaces.
-std::string PanelWindowId(const char *panel, const char *owner, int id) {
-  return std::format("{}_{}{}", panel, owner, id);
+// relabels its window without ImGui treating it as a new one (and losing
+// where it was docked).
+std::string HostWindowId(const char *kind, int id) {
+  return std::format("host_{}{}", kind, id);
 }
 
-std::string PanelWindowLabel(const char *panel, const char *owner, int id,
-                             const std::string &name) {
-  return std::format("{} — {}###{}", panel, name,
-                     PanelWindowId(panel, owner, id));
+std::string HostWindowLabel(const char *kind, int id,
+                            const std::string &name) {
+  return std::format("{}###{}", name, HostWindowId(kind, id));
+}
+
+std::string PanelWindowId(const char *panel, const char *kind, int id) {
+  return std::format("{}_{}{}", panel, kind, id);
+}
+
+// Panels are titled by the panel alone: the window they are docked in
+// already says which source they belong to.
+std::string PanelWindowLabel(const char *panel, const char *kind, int id) {
+  return std::format("{}###{}", panel, PanelWindowId(panel, kind, id));
 }
 
 // Finds the live DockableWindow whose identity is `id`, or nullptr.
-HelloImGui::DockableWindow *
-FindWindow(HelloImGui::RunnerParams *params, const std::string &id) {
+HelloImGui::DockableWindow *FindWindow(HelloImGui::RunnerParams *params,
+                                       const std::string &id) {
   for (auto &window : params->dockingParams.dockableWindows) {
     if (window.label.ends_with("###" + id))
       return &window;
   }
   return nullptr;
 }
+
+/// The window state of one owner: which of its panels are open, and the
+/// nested dockspace they are docked into.
+struct OwnerUi {
+  std::array<bool, kMaxPanels> visible{};
+
+  /// The owner's dockspace, as hashed inside its host window. Zero until the
+  /// host has been drawn once, which is also when there is nothing to keep
+  /// alive.
+  ImGuiID dockspace_id = 0;
+
+  /// Set while drawing the host window, cleared at the top of every frame.
+  /// False means the host is closed, collapsed, or an unselected tab -- in
+  /// which case the panels are not drawn, and the node is only kept alive so
+  /// they stay docked in it.
+  bool dockspace_live = false;
+
+  /// Rebuild the nested layout from scratch on the next draw, ignoring
+  /// whatever the .ini restored. Set for a brand new owner and by
+  /// "Reset panel layout".
+  bool rebuild_layout = false;
+};
 
 struct TimelineApp {
   HelloImGui::RunnerParams *params = nullptr;
@@ -111,7 +144,10 @@ struct TimelineApp {
   std::vector<std::unique_ptr<pacer::ComparisonView>> comparison_views;
   pacer::TileStore tile_store;
 
-  int active_source_id = -1;
+  /// Keyed by owner id. Kept beside the views rather than inside them: it is
+  /// the app that owns windows, the views only draw into them.
+  std::map<int, OwnerUi> source_ui;
+  std::map<int, OwnerUi> comparison_ui;
 
   bool show_map_tiles = true;
 
@@ -126,32 +162,20 @@ struct TimelineApp {
   /// down every window the current session owns.
   std::string want_open_session;
   /// Set once that teardown has been requested, and loaded a frame later.
-  /// A restored source keeps its saved id, so its windows carry the same
-  /// ImGui identities as the ones being torn down -- and hello_imgui only
-  /// drops the old ones on the next PreNewFrame. Adding the new ones in the
-  /// same frame leaves two windows sharing an identity, and some of them
-  /// come back floating instead of docked.
+  /// A restored source keeps its saved id, so its window carries the same
+  /// ImGui identity as the one being torn down -- and hello_imgui only drops
+  /// the old one on the next PreNewFrame. Adding the new one in the same
+  /// frame leaves two windows sharing an identity, and some of them come
+  /// back floating instead of docked.
   std::string opening_session;
 
-  /// Windows added at runtime, waiting to be docked beside a sibling of the
-  /// same kind: {new label, sibling label}. hello_imgui's own
-  /// AddDockableWindow docking only lands reliably in MainDockSpace here --
-  /// windows bound for the other dockspaces come up floating -- and docking
-  /// beside the panel of the same kind that is already open is what the
-  /// layout wants anyway: a second source's lap chart belongs next to the
-  /// first source's, wherever the user has since moved it.
-  std::vector<std::pair<std::string, std::string>> pending_dock;
-
-  /// Counts down to the layout rebuild a session open asks for; 0 when
-  /// none is pending. See OpenSession for why it is delayed.
-  int frames_until_layout_reset_ = 0;
+  /// Set by a session open, and honoured once every restored window has
+  /// actually arrived. See OpenSession.
+  bool want_layout_reset_ = false;
   std::string session_path = "session.json";
   std::string session_status;
-  /// Lap to put into a comparison created by dropping it on "New
-  /// comparison": the drop and the creation are a frame apart.
-  pacer::LapRef pending_drop;
 
-  //------------------------------- SOURCES ---------------------------------//
+  //-------------------------------- LOOKUP ---------------------------------//
 
   pacer::SourceView *ViewFor(int source_id) {
     for (auto &view : views) {
@@ -161,8 +185,6 @@ struct TimelineApp {
     return nullptr;
   }
 
-  pacer::SourceView *ActiveView() { return ViewFor(active_source_id); }
-
   pacer::ComparisonView *ComparisonViewFor(int comparison_id) {
     for (auto &view : comparison_views) {
       if (view->comparison->id == comparison_id)
@@ -171,133 +193,122 @@ struct TimelineApp {
     return nullptr;
   }
 
-  pacer::ComparisonView *CreateComparison() {
-    pacer::Comparison *comparison = session.NewComparison();
-    comparison_views.push_back(
-        std::make_unique<pacer::ComparisonView>(comparison));
-    return comparison_views.back().get();
+  //-------------------------------- OWNERS ---------------------------------//
+
+  /// A new owner's panels all start open: they arrive tabbed and docked by
+  /// BuildSourceLayout, so "all of them" is a readable window rather than a
+  /// wall of floating ones.
+  static OwnerUi NewOwnerUi(size_t panel_count) {
+    OwnerUi ui;
+    ui.visible.fill(false);
+    for (size_t i = 0; i < panel_count; ++i)
+      ui.visible[i] = true;
+    ui.rebuild_layout = true;
+    return ui;
   }
 
   /// Creates a source and its view, without touching the window list.
   pacer::SourceView *CreateSource() {
     pacer::Source *source = session.NewSource();
     views.push_back(std::make_unique<pacer::SourceView>(source));
-    active_source_id = source->id;
+    source_ui[source->id] = NewOwnerUi(std::size(kSourcePanels));
     return views.back().get();
   }
 
-  /// Creates the windows for one owner (a source or a comparison), one per
-  /// entry of `panels`. At startup they go straight into the initial list so
-  /// the default layout places them; later they arrive through hello_imgui's
-  /// runtime path instead.
-  template <size_t N>
-  void AddWindows(const PanelSpec (&panels)[N], const char *owner, int id,
-                  const std::string &name, bool run_time,
-                  const std::function<void(int, int)> &draw) {
-    for (size_t i = 0; i < N; ++i) {
-      HelloImGui::DockableWindow window;
-      window.label = PanelWindowLabel(panels[i].name, owner, id, name);
-      window.dockSpaceName = panels[i].dock_space;
-      // The grouped View menu below replaces the flat list hello_imgui
-      // would otherwise build, which grows unusable at one entry per panel
-      // per source.
-      window.includeInViewMenu = false;
-      int panel_index = (int)i;
-      window.GuiFunction = [draw, id, panel_index]() { draw(id, panel_index); };
-      if (run_time) {
-        // Find a window of the same kind that is already open, to dock
-        // beside once hello_imgui has created this one.
-        for (const auto &sibling : params->dockingParams.dockableWindows) {
-          if (sibling.label.starts_with(std::string(panels[i].name) + " —") &&
-              sibling.label != window.label) {
-            pending_dock.push_back({window.label, sibling.label});
-            break;
-          }
-        }
-        HelloImGui::AddDockableWindow(window, /*forceDockspace=*/true);
-      } else {
-        params->dockingParams.dockableWindows.push_back(window);
-      }
+  pacer::ComparisonView *CreateComparison() {
+    pacer::Comparison *comparison = session.NewComparison();
+    comparison_views.push_back(
+        std::make_unique<pacer::ComparisonView>(comparison));
+    comparison_ui[comparison->id] = NewOwnerUi(std::size(kComparisonPanels));
+    return comparison_views.back().get();
+  }
+
+  //------------------------------ HOST WINDOWS -----------------------------//
+
+  /// Adds the one dockable window an owner gets. At startup it goes straight
+  /// into the initial list so the default layout places it; later it arrives
+  /// through hello_imgui's runtime path instead.
+  void AddHostWindow(const char *kind, int id, const std::string &name,
+                     const char *dock_space, bool run_time,
+                     const std::function<void()> &draw) {
+    HelloImGui::DockableWindow window;
+    window.label = HostWindowLabel(kind, id, name);
+    window.dockSpaceName = dock_space;
+    // The window hosts its own menu bar: the panels inside it are reached
+    // from there, not from an app-wide list that grows one entry per panel
+    // per source.
+    window.imGuiWindowFlags = ImGuiWindowFlags_MenuBar;
+    window.includeInViewMenu = false;
+    window.GuiFunction = draw;
+    if (run_time) {
+      HelloImGui::AddDockableWindow(window, /*forceDockspace=*/true);
+    } else {
+      params->dockingParams.dockableWindows.push_back(window);
     }
   }
 
-  template <size_t N>
-  void RemoveWindows(const PanelSpec (&panels)[N], const char *owner, int id) {
-    for (size_t i = 0; i < N; ++i) {
-      if (auto *window =
-              FindWindow(params, PanelWindowId(panels[i].name, owner, id))) {
-        HelloImGui::RemoveDockableWindow(window->label);
-      }
+  void AddSourceWindow(pacer::SourceView &view, bool run_time) {
+    int id = view.source->id;
+    AddHostWindow(kSourceKind, id, view.source->name, "MainDockSpace",
+                  run_time, [this, id] { DrawSourceHost(id); });
+  }
+
+  void AddComparisonWindow(pacer::ComparisonView &view, bool run_time) {
+    int id = view.comparison->id;
+    AddHostWindow(kComparisonKind, id, view.comparison->name,
+                  "ComparisonSpace", run_time,
+                  [this, id] { DrawComparisonHost(id); });
+  }
+
+  void RemoveHostWindow(const char *kind, int id) {
+    if (auto *window = FindWindow(params, HostWindowId(kind, id))) {
+      HelloImGui::RemoveDockableWindow(window->label);
     }
   }
 
-  /// Re-labels an owner's windows in place. The "###" identity is untouched,
-  /// so the tabs keep their docking and their ImGui state.
-  template <size_t N>
-  void RelabelWindows(const PanelSpec (&panels)[N], const char *owner, int id,
-                      const std::string &name) {
-    for (size_t i = 0; i < N; ++i) {
-      if (auto *window =
-              FindWindow(params, PanelWindowId(panels[i].name, owner, id))) {
-        window->label = PanelWindowLabel(panels[i].name, owner, id, name);
-      }
+  /// Re-labels an owner's window in place. The "###" identity is untouched,
+  /// so the tab keeps its docking and its ImGui state.
+  void RelabelHostWindow(const char *kind, int id, const std::string &name) {
+    if (auto *window = FindWindow(params, HostWindowId(kind, id))) {
+      window->label = HostWindowLabel(kind, id, name);
     }
-  }
-
-  void AddSourceWindows(pacer::SourceView &view, bool run_time) {
-    AddWindows(kSourcePanels, "src", view.source->id, view.source->name,
-               run_time,
-               [this](int id, int panel) { DrawSourcePanel(id, panel); });
-  }
-
-  void AddComparisonWindows(pacer::ComparisonView &view, bool run_time) {
-    AddWindows(kComparisonPanels, "cmp", view.comparison->id,
-               view.comparison->name, run_time,
-               [this](int id, int panel) { DrawComparisonPanel(id, panel); });
   }
 
   void ApplyPendingEdits() {
     if (want_new_source) {
       want_new_source = false;
-      AddSourceWindows(*CreateSource(), /*run_time=*/true);
+      AddSourceWindow(*CreateSource(), /*run_time=*/true);
     }
     if (want_remove_source >= 0) {
       int source_id = want_remove_source;
       want_remove_source = -1;
-      RemoveWindows(kSourcePanels, "src", source_id);
-      // The windows are removed on the next PreNewFrame, before anything is
-      // drawn, so the view backing their GuiFunctions can go now.
+      RemoveHostWindow(kSourceKind, source_id);
+      // The window is removed on the next PreNewFrame, before anything is
+      // drawn, so the view backing its GuiFunction can go now.
       std::erase_if(views, [&](const std::unique_ptr<pacer::SourceView> &view) {
         return view->source->id == source_id;
       });
+      source_ui.erase(source_id);
       // Session::Remove also drops that source's laps from every
       // comparison, so their views have to redo their resampling.
       session.Remove(source_id);
       for (auto &view : comparison_views) {
         view->Invalidate();
       }
-      if (active_source_id == source_id) {
-        active_source_id = views.empty() ? -1 : views.front()->source->id;
-      }
     }
     if (want_new_comparison) {
       want_new_comparison = false;
-      pacer::ComparisonView *view = CreateComparison();
-      if (pending_drop.Valid()) {
-        session.AddLap(view->comparison, pending_drop);
-        pending_drop = {};
-        view->Invalidate();
-      }
-      AddComparisonWindows(*view, /*run_time=*/true);
+      AddComparisonWindow(*CreateComparison(), /*run_time=*/true);
     }
     if (want_remove_comparison >= 0) {
       int comparison_id = want_remove_comparison;
       want_remove_comparison = -1;
-      RemoveWindows(kComparisonPanels, "cmp", comparison_id);
+      RemoveHostWindow(kComparisonKind, comparison_id);
       std::erase_if(comparison_views,
                     [&](const std::unique_ptr<pacer::ComparisonView> &view) {
                       return view->comparison->id == comparison_id;
                     });
+      comparison_ui.erase(comparison_id);
       session.RemoveComparison(comparison_id);
     }
     if (!opening_session.empty()) {
@@ -308,22 +319,25 @@ struct TimelineApp {
     }
   }
 
+  //------------------------------- SESSIONS --------------------------------//
+
   /// Drops every window the current session owns. The windows themselves go
   /// on the next PreNewFrame, which is why loading waits a frame.
   void CloseSession() {
     for (auto &view : views) {
-      RemoveWindows(kSourcePanels, "src", view->source->id);
+      RemoveHostWindow(kSourceKind, view->source->id);
     }
     for (auto &view : comparison_views) {
-      RemoveWindows(kComparisonPanels, "cmp", view->comparison->id);
+      RemoveHostWindow(kComparisonKind, view->comparison->id);
     }
     views.clear();
     comparison_views.clear();
-    active_source_id = -1;
+    source_ui.clear();
+    comparison_ui.clear();
   }
 
   /// Reads a session and gives every restored source and comparison its
-  /// windows back. The restored ids are the saved ones, so the windows come
+  /// window back. The restored ids are the saved ones, so the windows come
   /// back with the identities the layout file remembers and land where they
   /// were.
   void OpenSession(const std::string &path) {
@@ -335,34 +349,57 @@ struct TimelineApp {
       // rather than a half-torn-down window set.
       session.sources.clear();
       session.comparisons.clear();
-      AddSourceWindows(*CreateSource(), /*run_time=*/true);
+      AddSourceWindow(*CreateSource(), /*run_time=*/true);
       return;
     }
 
     session_path = path;
     for (auto &source : session.sources) {
       views.push_back(std::make_unique<pacer::SourceView>(source.get()));
-      AddSourceWindows(*views.back(), /*run_time=*/true);
+      source_ui[source->id] = NewOwnerUi(std::size(kSourcePanels));
+      AddSourceWindow(*views.back(), /*run_time=*/true);
     }
     for (auto &comparison : session.comparisons) {
       comparison_views.push_back(
           std::make_unique<pacer::ComparisonView>(comparison.get()));
-      AddComparisonWindows(*comparison_views.back(), /*run_time=*/true);
+      comparison_ui[comparison->id] =
+          NewOwnerUi(std::size(kComparisonPanels));
+      AddComparisonWindow(*comparison_views.back(), /*run_time=*/true);
     }
     if (views.empty()) {
-      AddSourceWindows(*CreateSource(), /*run_time=*/true);
-    } else {
-      active_source_id = views.front()->source->id;
+      AddSourceWindow(*CreateSource(), /*run_time=*/true);
     }
     // Opening a session replaces every window, so there is no arrangement
     // left to preserve -- and rebuilding the layout is the one placement
-    // mechanism that reliably reaches every dockspace. It has to wait until
-    // the added windows are actually in dockingParams.dockableWindows,
-    // which hello_imgui does two PreNewFrames from here; a reset before
-    // that rebuilds the layout without them and leaves them floating.
-    frames_until_layout_reset_ = 3;
+    // mechanism that reliably reaches every dockspace. It has to wait for
+    // the restored windows to exist: a reset that runs before them lays the
+    // dockspaces out without them, and they stay wherever they were added
+    // instead -- comparisons tabbed in among the sources.
+    want_layout_reset_ = true;
     session_status = std::format("Opened {} ({} sources, {} comparisons).",
                                  path, views.size(), comparison_views.size());
+  }
+
+  /// Asks for a session file and queues it for opening. A no-op if the
+  /// user cancels, or where there is no dialog to put up (the menu offers a
+  /// path field there instead).
+  void PromptOpenSession() {
+    std::string path = pacer::OpenFileDialog("Open a session",
+                                             kSessionFilters, session_path);
+    if (!path.empty()) {
+      want_open_session = path;
+    }
+  }
+
+  /// Asks where to write the session, and saves there. The chosen path
+  /// becomes the one plain Ctrl+S writes to from then on.
+  void PromptSaveSessionAs() {
+    std::string path = pacer::SaveFileDialog("Save the session as",
+                                             kSessionFilters, session_path);
+    if (!path.empty()) {
+      session_path = path;
+      SaveSession();
+    }
   }
 
   void SaveSession() {
@@ -374,39 +411,273 @@ struct TimelineApp {
     }
   }
 
-  //-------------------------------- PANELS ---------------------------------//
+  //--------------------------- NESTED DOCKSPACES ---------------------------//
 
-  /// `panel_index` indexes kSourcePanels. A removed source's windows live
-  /// one more frame than its view does (hello_imgui removes them on the next
-  /// PreNewFrame), so a missing view is expected, not an error.
-  void DrawSourcePanel(int source_id, int panel_index) {
+  /// Submits the owner's dockspace, building its default arrangement the
+  /// first time (or when the ini has none to restore). Call from inside the
+  /// host window; `build` receives the root node and docks the panels into
+  /// it. Returns the dockspace id.
+  ImGuiID DrawOwnerDockspace(OwnerUi &ui,
+                             const std::function<void(ImGuiID)> &build) {
+    ImGuiID dockspace_id = ImGui::GetID("panels");
+    ui.dockspace_id = dockspace_id;
+    ImVec2 size = ImGui::GetContentRegionAvail();
+    if (ui.rebuild_layout || !ImGui::DockBuilderGetNode(dockspace_id)) {
+      // The splits are ratios of the node the builder is handed, and ImGui
+      // keeps each child's size across later resizes rather than its share
+      // -- so a layout built against a placeholder size stays wrong. The
+      // frame hello_imgui first renders a runtime-added window in, it is a
+      // bare offscreen dummy; wait for a frame where the host is really on
+      // screen, however many that takes.
+      if (size.x < 200 || size.y < 150) {
+        ui.rebuild_layout = true;
+      } else {
+        ui.rebuild_layout = false;
+        ImGui::DockBuilderRemoveNode(dockspace_id);
+        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspace_id, size);
+        build(dockspace_id);
+        ImGui::DockBuilderFinish(dockspace_id);
+      }
+    }
+    ImGui::DockSpace(dockspace_id);
+    ui.dockspace_live = true;
+    return dockspace_id;
+  }
+
+  /// The setup column on the left, the map above the lap results, and the
+  /// two views of the same thing (map/samples, lap table/telemetry) tabbed
+  /// together.
+  void BuildSourceLayout(ImGuiID root, int id) {
+    ImGuiID center = root;
+    ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.28f,
+                                               nullptr, &center);
+    ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.38f,
+                                                 nullptr, &center);
+    ImGuiID bottom_right = ImGui::DockBuilderSplitNode(
+        bottom, ImGuiDir_Right, 0.5f, nullptr, &bottom);
+    ImGuiID left_bottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down,
+                                                      0.55f, nullptr, &left);
+
+    auto dock = [&](const char *panel, ImGuiID node) {
+      ImGui::DockBuilderDockWindow(
+          PanelWindowLabel(panel, kSourceKind, id).c_str(), node);
+    };
+    dock("Map", center);
+    dock("Samples", center);
+    dock("Lap chart", bottom);
+    dock("Lap table", bottom_right);
+    dock("Telemetry", bottom_right);
+    dock("Track", left);
+    dock("Files", left_bottom);
+  }
+
+  void BuildComparisonLayout(ImGuiID root, int id) {
+    ImGuiID left = root;
+    ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.45f,
+                                                nullptr, &left);
+    auto dock = [&](const char *panel, ImGuiID node) {
+      ImGui::DockBuilderDockWindow(
+          PanelWindowLabel(panel, kComparisonKind, id).c_str(), node);
+    };
+    dock("Delta", left);
+    dock("Map", right);
+  }
+
+  //------------------------------ HOST WINDOWS -----------------------------//
+
+  void DrawSourceHost(int source_id) {
     pacer::SourceView *view = ViewFor(source_id);
     if (!view)
       return;
-    // Working in a source's window is what makes it the active one, so the
-    // comparison views follow along without a separate click.
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-      active_source_id = source_id;
+    OwnerUi &ui = source_ui[source_id];
+
+    if (ImGui::BeginMenuBar()) {
+      if (ImGui::BeginMenu("Source")) {
+        ImGui::TextDisabled("Name");
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::InputText("##name", &view->source->name)) {
+          RelabelHostWindow(kSourceKind, source_id, view->source->name);
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("%zu files, %zu samples, %zu laps",
+                            view->source->files.size(),
+                            view->source->UsedSampleCount(),
+                            view->source->LapsCount());
+        ImGui::Separator();
+        if (ImGui::MenuItem("New source", "Ctrl+N")) {
+          want_new_source = true;
+        }
+        if (ImGui::MenuItem("Close source")) {
+          want_remove_source = source_id;
+        }
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Track")) {
+        view->DrawTrackMenu();
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Files")) {
+        view->DrawFilesMenu();
+        ImGui::EndMenu();
+      }
+      DrawPanelsMenu(ui, kSourcePanels, std::size(kSourcePanels));
+      ImGui::EndMenuBar();
     }
 
-    switch (panel_index) {
+    DrawOwnerDockspace(
+        ui, [this, source_id](ImGuiID root) {
+          BuildSourceLayout(root, source_id);
+        });
+  }
+
+  void DrawComparisonHost(int comparison_id) {
+    pacer::ComparisonView *view = ComparisonViewFor(comparison_id);
+    if (!view)
+      return;
+    OwnerUi &ui = comparison_ui[comparison_id];
+
+    if (ImGui::BeginMenuBar()) {
+      if (ImGui::BeginMenu("Comparison")) {
+        ImGui::TextDisabled("Name");
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::InputText("##name", &view->comparison->name)) {
+          RelabelHostWindow(kComparisonKind, comparison_id,
+                            view->comparison->name);
+        }
+        ImGui::Separator();
+        if (view->comparison->HasTrack()) {
+          ImGui::TextDisabled(
+              "%zu laps on %s", view->comparison->laps.size(),
+              std::filesystem::path(view->comparison->track_path)
+                  .stem()
+                  .string()
+                  .c_str());
+        } else {
+          ImGui::TextDisabled("empty");
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("New comparison", "Ctrl+Shift+N")) {
+          want_new_comparison = true;
+        }
+        if (ImGui::MenuItem("Close comparison")) {
+          want_remove_comparison = comparison_id;
+        }
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Laps")) {
+        view->DrawLapsMenu(session);
+        ImGui::EndMenu();
+      }
+      DrawPanelsMenu(ui, kComparisonPanels, std::size(kComparisonPanels));
+      ImGui::EndMenuBar();
+    }
+
+    DrawOwnerDockspace(ui, [this, comparison_id](ImGuiID root) {
+      BuildComparisonLayout(root, comparison_id);
+    });
+  }
+
+  /// The owner's own View menu: which of its panels are open, plus a way
+  /// back to the arrangement they started in.
+  void DrawPanelsMenu(OwnerUi &ui, const char *const *panels, size_t count) {
+    if (!ImGui::BeginMenu("View"))
+      return;
+    for (size_t i = 0; i < count; ++i) {
+      if (ImGui::MenuItem(panels[i], nullptr, ui.visible[i])) {
+        ui.visible[i] = !ui.visible[i];
+      }
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Show all panels")) {
+      for (size_t i = 0; i < count; ++i)
+        ui.visible[i] = true;
+    }
+    if (ImGui::MenuItem("Reset panel layout")) {
+      for (size_t i = 0; i < count; ++i)
+        ui.visible[i] = true;
+      ui.rebuild_layout = true;
+    }
+    ImGui::EndMenu();
+  }
+
+  //-------------------------------- PANELS ---------------------------------//
+
+  /// Draws every open panel of every owner whose host window is on screen.
+  /// Runs after the host windows (PostRenderDockableWindows), so the
+  /// dockspace each panel docks into has already been submitted this frame.
+  void DrawPanels() {
+    for (auto &view : views) {
+      OwnerUi &ui = source_ui[view->source->id];
+      if (!ui.dockspace_live) {
+        KeepDockspaceAlive(ui);
+        continue;
+      }
+      for (size_t i = 0; i < std::size(kSourcePanels); ++i) {
+        if (!ui.visible[i])
+          continue;
+        std::string label =
+            PanelWindowLabel(kSourcePanels[i], kSourceKind, view->source->id);
+        if (ImGui::Begin(label.c_str(), &ui.visible[i])) {
+          DrawSourcePanel(*view, i);
+        }
+        ImGui::End();
+      }
+    }
+
+    for (auto &view : comparison_views) {
+      OwnerUi &ui = comparison_ui[view->comparison->id];
+      if (!ui.dockspace_live) {
+        KeepDockspaceAlive(ui);
+        continue;
+      }
+      for (size_t i = 0; i < std::size(kComparisonPanels); ++i) {
+        if (!ui.visible[i])
+          continue;
+        std::string label = PanelWindowLabel(
+            kComparisonPanels[i], kComparisonKind, view->comparison->id);
+        if (ImGui::Begin(label.c_str(), &ui.visible[i])) {
+          DrawComparisonPanel(*view, i);
+        }
+        ImGui::End();
+      }
+    }
+  }
+
+  /// A host window that is closed, collapsed or an unselected tab does not
+  /// submit its dockspace, and ImGui drops nodes nobody claimed -- which
+  /// would undock every panel inside it. This claims the node without
+  /// drawing it, so the arrangement survives until the host is back.
+  static void KeepDockspaceAlive(const OwnerUi &ui) {
+    if (ui.dockspace_id == 0)
+      return; // never drawn, so there is no node yet
+    ImGui::DockSpace(ui.dockspace_id, ImVec2(0, 0),
+                     ImGuiDockNodeFlags_KeepAliveOnly);
+  }
+
+  /// `panel` indexes kSourcePanels.
+  void DrawSourcePanel(pacer::SourceView &view, size_t panel) {
+    switch (panel) {
     case 0:
-      view->DrawTrackPanel();
+      DrawMapPanel(view);
       break;
     case 1:
-      view->DrawFilesPanel();
+      view.DrawSamplesPanel();
       break;
     case 2:
-      DrawMapPanel(*view);
+      view.DrawLapChartPanel();
       break;
     case 3:
-      view->DrawSamplesPanel();
+      view.DrawLapTablePanel();
       break;
     case 4:
-      view->DrawLapChartPanel();
+      view.display.DisplayLapTelemetry();
       break;
     case 5:
-      view->DrawLapTablePanel();
+      view.DrawTrackPanel();
+      break;
+    case 6:
+      view.DrawFilesPanel();
       break;
     }
   }
@@ -436,176 +707,33 @@ struct TimelineApp {
     ImPlot::EndPlot();
   }
 
-  /// `panel_index` indexes kComparisonPanels; see DrawSourcePanel on why a
-  /// missing view is expected rather than an error.
-  void DrawComparisonPanel(int comparison_id, int panel_index) {
-    pacer::ComparisonView *view = ComparisonViewFor(comparison_id);
-    if (!view)
-      return;
-
-    if (panel_index == 0) {
-      view->Display(session);
+  /// `panel` indexes kComparisonPanels.
+  void DrawComparisonPanel(pacer::ComparisonView &view, size_t panel) {
+    if (panel == 0) {
+      view.Display(session);
       return;
     }
 
-    if (!view->comparison->HasTrack()) {
+    if (!view.comparison->HasTrack()) {
       ImGui::TextWrapped("Drop a lap into this comparison to see it on the "
                          "map.");
       return;
     }
-    ImGui::Checkbox("Satellite", &view->show_satellite);
+    ImGui::Checkbox("Satellite", &view.show_satellite);
     ImGui::SameLine();
-    ImGui::Checkbox("Reference track", &view->show_reference_track);
+    ImGui::Checkbox("Reference track", &view.show_reference_track);
     if (ImPlot::BeginPlot("##comparison_map", ImVec2(-1, -1),
                           ImPlotFlags_Equal)) {
-      view->SetupComparisonMap();
-      if (view->show_satellite) {
-        pacer::PlotSatelliteTiles(tile_store, view->cs);
+      view.SetupComparisonMap();
+      if (view.show_satellite) {
+        pacer::PlotSatelliteTiles(tile_store, view.cs);
       }
-      view->PlotComparisonMap(session);
+      view.PlotComparisonMap(session);
       ImPlot::EndPlot();
     }
   }
 
-  /// Accepts a lap dropped on the item just submitted. Returns the dropped
-  /// lap, or an invalid LapRef. `reason` explains a refused drop.
-  pacer::LapRef AcceptLapDrop(const std::string &reason) {
-    pacer::LapRef dropped;
-    if (!ImGui::BeginDragDropTarget())
-      return dropped;
-    if (const ImGuiPayload *payload =
-            ImGui::AcceptDragDropPayload(pacer::kLapDragPayload,
-                                         reason.empty()
-                                             ? 0
-                                             : ImGuiDragDropFlags_AcceptBeforeDelivery |
-                                                   ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
-      if (reason.empty()) {
-        dropped = *reinterpret_cast<const pacer::LapRef *>(payload->Data);
-      } else {
-        // Refused: say why rather than swallowing the drop silently.
-        ImGui::SetTooltip("Can't add: %s", reason.c_str());
-      }
-    }
-    ImGui::EndDragDropTarget();
-    return dropped;
-  }
-
-  void DrawComparisonsPanel() {
-    if (ImGui::Button("New comparison")) {
-      want_new_comparison = true;
-    }
-
-    for (auto &view : comparison_views) {
-      pacer::Comparison &comparison = *view->comparison;
-      ImGui::PushID(comparison.id);
-
-      ImGui::SetNextItemWidth(-60);
-      if (ImGui::InputText("##name", &comparison.name)) {
-        RelabelWindows(kComparisonPanels, "cmp", comparison.id,
-                       comparison.name);
-      }
-      ImGui::SameLine();
-      if (ImGui::SmallButton("Close")) {
-        want_remove_comparison = comparison.id;
-      }
-
-      // The row is a drop target too, so laps can be filed into a
-      // comparison without its own window being visible.
-      ImGui::Indent();
-      std::string summary =
-          comparison.laps.empty()
-              ? std::string("empty — drop a lap here")
-              : std::format("{} laps · {}", comparison.laps.size(),
-                            std::filesystem::path(comparison.track_path)
-                                .stem()
-                                .string());
-      ImGui::Selectable(summary.c_str(), false, 0,
-                        ImVec2(ImGui::GetContentRegionAvail().x, 0));
-      if (pacer::LapRef dropped = AcceptLapDrop(
-              PendingDropReason(comparison));
-          dropped.Valid()) {
-        session.AddLap(&comparison, dropped);
-        view->Invalidate();
-      }
-      ImGui::Unindent();
-
-      ImGui::PopID();
-    }
-
-    // Dropping onto empty space below the list starts a new comparison with
-    // that lap already in it -- the shortest path from "this lap looks
-    // interesting" to a delta.
-    ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x,
-                        std::max(ImGui::GetContentRegionAvail().y,
-                                 ImGui::GetTextLineHeight() * 2)));
-    if (ImGui::BeginDragDropTarget()) {
-      if (const ImGuiPayload *payload =
-              ImGui::AcceptDragDropPayload(pacer::kLapDragPayload)) {
-        pending_drop = *reinterpret_cast<const pacer::LapRef *>(payload->Data);
-        want_new_comparison = true;
-      }
-      ImGui::EndDragDropTarget();
-    }
-    if (comparison_views.empty()) {
-      ImVec2 start = ImGui::GetCursorStartPos();
-      ImGui::SetCursorPos(
-          ImVec2(start.x, start.y + ImGui::GetTextLineHeightWithSpacing() * 2));
-      ImGui::TextWrapped("Drop a lap here to start a comparison.");
-    }
-  }
-
-  /// Why the lap currently being dragged could not join `comparison`, or
-  /// empty. Peeks at the in-flight payload, since the reason has to be
-  /// known before the drop is accepted.
-  std::string PendingDropReason(const pacer::Comparison &comparison) {
-    const ImGuiPayload *payload = ImGui::GetDragDropPayload();
-    if (!payload || !payload->IsDataType(pacer::kLapDragPayload))
-      return {};
-    return session.WhyNotAddable(
-        comparison, *reinterpret_cast<const pacer::LapRef *>(payload->Data));
-  }
-
-  void DrawSourcesPanel() {
-    if (ImGui::Button("New source")) {
-      want_new_source = true;
-    }
-
-    for (auto &view : views) {
-      pacer::Source &source = *view->source;
-      ImGui::PushID(source.id);
-
-      bool active = source.id == active_source_id;
-      if (ImGui::Selectable(std::format("F{}", source.id).c_str(), active,
-                            ImGuiSelectableFlags_AllowOverlap,
-                            ImVec2(28, 0))) {
-        active_source_id = source.id;
-      }
-      ImGui::SameLine();
-
-      ImGui::SetNextItemWidth(-60);
-      if (ImGui::InputText("##name", &source.name)) {
-        RelabelWindows(kSourcePanels, "src", source.id, source.name);
-      }
-      ImGui::SameLine();
-      if (ImGui::SmallButton("Close")) {
-        want_remove_source = source.id;
-      }
-
-      ImGui::Indent();
-      ImGui::TextDisabled("%zu files, %zu samples, %zu laps",
-                          source.files.size(), source.UsedSampleCount(),
-                          source.LapsCount());
-      ImGui::Unindent();
-
-      ImGui::PopID();
-    }
-
-    if (views.empty()) {
-      ImGui::TextWrapped("No sources. Add one to load a recording.");
-    }
-  }
-
-  //--------------------------------- MENUS ---------------------------------//
+  //------------------------------- APP MENUS -------------------------------//
 
   void DrawFileMenu() {
     if (!ImGui::BeginMenu("File"))
@@ -618,16 +746,32 @@ struct TimelineApp {
     }
     ImGui::Separator();
 
-    // No native file dialog here, so the path is typed. A session file
-    // records the setup -- paths, trims, tracks, which laps each comparison
-    // holds -- and re-reads the recordings on open.
-    ImGui::SetNextItemWidth(280);
-    ImGui::InputText("##session_path", &session_path);
-    if (ImGui::MenuItem("Open session", "Ctrl+O") && !session_path.empty()) {
-      want_open_session = session_path;
-    }
-    if (ImGui::MenuItem("Save session", "Ctrl+S") && !session_path.empty()) {
-      SaveSession();
+    // A session file records the setup -- paths, trims, tracks, which laps
+    // each comparison holds -- and re-reads the recordings on open.
+    if (pacer::HasNativeFileDialog()) {
+      if (ImGui::MenuItem("Open session...", "Ctrl+O")) {
+        PromptOpenSession();
+      }
+      if (ImGui::MenuItem("Save session", "Ctrl+S") &&
+          !session_path.empty()) {
+        SaveSession();
+      }
+      if (ImGui::MenuItem("Save session as...", "Ctrl+Shift+S")) {
+        PromptSaveSessionAs();
+      }
+      ImGui::TextDisabled("%s", session_path.empty() ? "unsaved"
+                                                     : session_path.c_str());
+    } else {
+      ImGui::SetNextItemWidth(280);
+      ImGui::InputText("##session_path", &session_path);
+      if (ImGui::MenuItem("Open session", "Ctrl+O") &&
+          !session_path.empty()) {
+        want_open_session = session_path;
+      }
+      if (ImGui::MenuItem("Save session", "Ctrl+S") &&
+          !session_path.empty()) {
+        SaveSession();
+      }
     }
     if (!session_status.empty()) {
       ImGui::TextDisabled("%s", session_status.c_str());
@@ -640,13 +784,15 @@ struct TimelineApp {
     ImGui::EndMenu();
   }
 
-  /// Toggles the window whose ImGui identity is `id`, if it is there.
-  void MenuItemForWindow(const char *label, const std::string &id) {
+  /// Toggles the host window whose ImGui identity is `id`.
+  void MenuItemForHost(const char *label, const std::string &id) {
     for (auto &window : params->dockingParams.dockableWindows) {
       if (!window.label.ends_with("###" + id))
         continue;
       if (ImGui::MenuItem(label, nullptr, window.isVisible)) {
         window.isVisible = !window.isVisible;
+        if (window.isVisible)
+          window.focusWindowAtNextFrame = true;
       }
       return;
     }
@@ -655,56 +801,35 @@ struct TimelineApp {
     ImGui::EndDisabled();
   }
 
+  /// The app's View menu is now only about which sources and comparisons
+  /// are on screen -- what is inside each of them is that window's own
+  /// business.
   void DrawViewMenu() {
     if (!ImGui::BeginMenu("View"))
       return;
-
-    // The app-wide windows first, then one submenu per source, so the menu
-    // stays the same shape however many sources are open.
-    for (auto &window : params->dockingParams.dockableWindows) {
-      if (!window.includeInViewMenu)
-        continue;
-      if (ImGui::MenuItem(window.label.c_str(), nullptr, window.isVisible)) {
-        window.isVisible = !window.isVisible;
-      }
-    }
 
     if (!views.empty()) {
       ImGui::SeparatorText("Sources");
     }
     for (auto &view : views) {
-      const pacer::Source &source = *view->source;
-      if (!ImGui::BeginMenu(source.name.c_str()))
-        continue;
-      for (const PanelSpec &panel : kSourcePanels) {
-        MenuItemForWindow(panel.name,
-                          PanelWindowId(panel.name, "src", source.id));
-      }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Make active", nullptr,
-                          source.id == active_source_id)) {
-        active_source_id = source.id;
-      }
-      ImGui::EndMenu();
+      MenuItemForHost(view->source->name.c_str(),
+                      HostWindowId(kSourceKind, view->source->id));
     }
-
     if (!comparison_views.empty()) {
       ImGui::SeparatorText("Comparisons");
     }
     for (auto &view : comparison_views) {
-      const pacer::Comparison &comparison = *view->comparison;
-      if (!ImGui::BeginMenu(comparison.name.c_str()))
-        continue;
-      for (const PanelSpec &panel : kComparisonPanels) {
-        MenuItemForWindow(panel.name,
-                          PanelWindowId(panel.name, "cmp", comparison.id));
-      }
-      ImGui::EndMenu();
+      MenuItemForHost(view->comparison->name.c_str(),
+                      HostWindowId(kComparisonKind, view->comparison->id));
     }
 
     ImGui::Separator();
     if (ImGui::MenuItem("Restore default layout")) {
       params->dockingParams.layoutReset = true;
+      for (auto &[id, ui] : source_ui)
+        ui.rebuild_layout = true;
+      for (auto &[id, ui] : comparison_ui)
+        ui.rebuild_layout = true;
     }
     ImGui::MenuItem("Status bar", nullptr,
                     &params->imGuiWindowParams.showStatusBar);
@@ -713,22 +838,25 @@ struct TimelineApp {
 
   //--------------------------------- FRAME ---------------------------------//
 
-  /// Docks each freshly added window into the node its sibling of the same
-  /// kind occupies. Both windows have to exist in ImGui first, which is a
-  /// frame or two after AddDockableWindow was called; entries whose sibling
-  /// has since gone are dropped rather than retried forever.
-  void ApplyPendingDocking() {
-    std::erase_if(pending_dock, [](const auto &entry) {
-      ImGuiWindow *sibling = ImGui::FindWindowByName(entry.second.c_str());
-      if (!sibling)
-        return true; // the sibling closed; leave the new window where it is
-      if (!ImGui::FindWindowByName(entry.first.c_str()))
-        return false; // not created yet
-      if (sibling->DockId == 0)
-        return true; // the sibling is floating, so there is nothing to join
-      ImGui::DockBuilderDockWindow(entry.first.c_str(), sibling->DockId);
-      return true;
-    });
+  /// True once every owner's window has been registered with hello_imgui
+  /// (which happens two PreNewFrames after AddDockableWindow) and created
+  /// in ImGui. Only then does a layout reset have anything to place.
+  bool HostWindowsReady() {
+    auto ready = [this](const char *kind, int id, const std::string &name) {
+      return FindWindow(params, HostWindowId(kind, id)) != nullptr &&
+             ImGui::FindWindowByName(
+                 HostWindowLabel(kind, id, name).c_str()) != nullptr;
+    };
+    for (const auto &view : views) {
+      if (!ready(kSourceKind, view->source->id, view->source->name))
+        return false;
+    }
+    for (const auto &view : comparison_views) {
+      if (!ready(kComparisonKind, view->comparison->id,
+                 view->comparison->name))
+        return false;
+    }
+    return true;
   }
 
   void NewFrame() {
@@ -739,10 +867,15 @@ struct TimelineApp {
     for (auto &view : comparison_views) {
       view->Update();
     }
+    // Cleared here and set again by whichever host windows get drawn this
+    // frame, a few calls later.
+    for (auto &[id, ui] : source_ui)
+      ui.dockspace_live = false;
+    for (auto &[id, ui] : comparison_ui)
+      ui.dockspace_live = false;
 
-    ApplyPendingDocking();
-
-    if (frames_until_layout_reset_ > 0 && --frames_until_layout_reset_ == 0) {
+    if (want_layout_reset_ && HostWindowsReady()) {
+      want_layout_reset_ = false;
       params->dockingParams.layoutReset = true;
     }
 
@@ -756,10 +889,18 @@ struct TimelineApp {
       want_new_comparison = true;
     } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
       want_new_source = true;
+    } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift |
+                                       ImGuiKey_S)) {
+      if (pacer::HasNativeFileDialog())
+        PromptSaveSessionAs();
     } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
       SaveSession();
     } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
-      want_open_session = session_path;
+      if (pacer::HasNativeFileDialog()) {
+        PromptOpenSession();
+      } else {
+        want_open_session = session_path;
+      }
     }
   }
 };
@@ -851,38 +992,22 @@ int main(int argc, char **argv) {
     app.DrawViewMenu();
   };
 
-  HelloImGui::DockableWindow sourcesWindow;
-  sourcesWindow.label = "Sources";
-  sourcesWindow.dockSpaceName = "LeftSpace";
-  sourcesWindow.GuiFunction = [&]() { app.DrawSourcesPanel(); };
-
-  HelloImGui::DockableWindow comparisonsWindow;
-  comparisonsWindow.label = "Comparisons";
-  comparisonsWindow.dockSpaceName = "LeftSpace";
-  comparisonsWindow.GuiFunction = [&]() { app.DrawComparisonsPanel(); };
-
-  HelloImGui::DockableWindow lapTelemetryWindow;
-  lapTelemetryWindow.label = "Lap Telemetry";
-  lapTelemetryWindow.dockSpaceName = "CompMapSpace";
-  lapTelemetryWindow.GuiFunction = [&]() {
-    if (pacer::SourceView *view = app.ActiveView()) {
-      view->display.DisplayLapTelemetry();
-    }
-  };
-
-  runnerParams.dockingParams.dockableWindows = {
-      sourcesWindow, comparisonsWindow, lapTelemetryWindow};
-  // The startup sources' and comparisons' windows go into the initial list
-  // rather than through AddDockableWindow, so the default layout places them
-  // on frame one; anything added later goes through AddDockableWindow.
+  // The startup owners' windows go into the initial list rather than
+  // through AddDockableWindow, so the default layout places them on frame
+  // one; anything added later goes through AddDockableWindow.
   for (auto &view : app.views) {
-    app.AddSourceWindows(*view, /*run_time=*/false);
+    app.AddSourceWindow(*view, /*run_time=*/false);
   }
   for (auto &view : app.comparison_views) {
-    app.AddComparisonWindows(*view, /*run_time=*/false);
+    app.AddComparisonWindow(*view, /*run_time=*/false);
   }
 
   runnerParams.callbacks.ShowGui = [&]() { app.NewFrame(); };
+  // The panels live inside their owner's dockspace, so they are drawn after
+  // the host windows that submit it.
+  runnerParams.callbacks.PostRenderDockableWindows = [&]() {
+    app.DrawPanels();
+  };
 
   HelloImGui::Run(runnerParams);
 
