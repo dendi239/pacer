@@ -68,20 +68,23 @@ words, the Earth is slightly flattened. 22 Oct 2020
 
 auto pacer::CoordinateSystem::Global(Vec3f point) const -> GPSSample {
   point = local_origin + dx * point[0] + dy * point[1] + dz * point[2];
-  auto lon = 180 * atan2(point[1], point[0]) / M_PI;
-  auto altitude =
-      (std::sqrt((point / Vec3f{R_equator, R_equator, R_pole}).Norm()) - 1) *
-      R_equator;
-
-  auto lat =
-      180 *
-      atan2(point[2] / R_pole,
-            std::sqrt(point[0] * point[0] + point[1] * point[1]) / R_equator) /
-      M_PI;
+  // Inverse of CanonicalLocal (WGS84 ECEF -> geodetic). Latitude has no
+  // closed form, but the fixed-point iteration converges to sub-millimetre
+  // precision in a handful of steps away from the poles.
+  double p = std::sqrt(point[0] * point[0] + point[1] * point[1]);
+  double lon = std::atan2(point[1], point[0]);
+  double lat = std::atan2(point[2], p * (1 - E_squared));
+  double altitude = 0;
+  for (int i = 0; i < 5; ++i) {
+    double N = R_semi_major /
+               std::sqrt(1 - E_squared * std::sin(lat) * std::sin(lat));
+    altitude = p / std::cos(lat) - N;
+    lat = std::atan2(point[2], p * (1 - E_squared * N / (N + altitude)));
+  }
 
   return GPSSample{
-      .lat = lat,
-      .lon = lon,
+      .lat = lat * 180 / M_PI,
+      .lon = lon * 180 / M_PI,
       .altitude = altitude,
       .full_speed = 0,
       .ground_speed = 0,
@@ -101,12 +104,17 @@ auto pacer::CoordinateSystem::Local(GPSSample point) const -> Vec3f {
 }
 
 pacer::Vec3f pacer::CoordinateSystem::CanonicalLocal(GPSSample origin) {
-  return Vec3f{R_equator * std::cos(origin.lat * M_PI / 180.) *
-                   std::cos(origin.lon * M_PI / 180.),
-               R_equator * std::cos(origin.lat * M_PI / 180.) *
-                   std::sin(origin.lon * M_PI / 180.),
-               R_pole * std::sin(origin.lat * M_PI / 180.)} *
-         (1 + origin.altitude / R_equator);
+  double N = R_semi_major /
+             std::sqrt(1 - E_squared * std::sin(origin.lat * M_PI / 180.) *
+                               std::sin(origin.lat * M_PI / 180.));
+  return Vec3f{
+      (N + origin.altitude) * std::cos(origin.lat * M_PI / 180.) *
+          std::cos(origin.lon * M_PI / 180.),
+      (N + origin.altitude) * std::cos(origin.lat * M_PI / 180.) *
+          std::sin(origin.lon * M_PI / 180.),
+      (N * (1 - E_squared) + origin.altitude) *
+          std::sin(origin.lat * M_PI / 180.),
+  };
 }
 
 pacer::CoordinateSystem::CoordinateSystem(GPSSample origin)

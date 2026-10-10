@@ -49,13 +49,15 @@ struct CoordinateSystem {
   // Coordinate system maps GPS coordinates to local coordinates.
   //  N.B. All local coordinates measured in meters.
   //
-  // I employ following formulas:
-  //   x = h_c * R_equator * cos(lat) * cos(lon)
-  //   y = h_c * R_equator * cos(lat) * sin(lon)
-  //   z = h_c * R_pole * sin(lat)
+  // Points are first taken to WGS84 ECEF:
+  //   x = (N + altitude) * cos(lat) * cos(lon)
+  //   y = (N + altitude) * cos(lat) * sin(lon)
+  //   z = (N * (1 - e^2) + altitude) * sin(lat)
   //
-  // Where h_c is the height compenstaion factor:
-  //   h_c = 1 + altitude / R_equator
+  // Where N is the prime vertical radius of curvature:
+  //   N = R_semi_major / sqrt(1 - e^2 * sin^2(lat))
+  //
+  // Global() inverts this iteratively, so keep the two in sync.
   //
   // Basis for resulting coordinate system is almost normalised gradients along
   // lon/lat/altiude coordinates: only altitude slightly differs to have
@@ -83,6 +85,10 @@ struct CoordinateSystem {
 private:
   constexpr static double R_equator = 6'378'000;
   constexpr static double R_pole = 6'357'000;
+
+  constexpr static double R_semi_major = 6'378'137;
+  constexpr static double E_squared = 0.00669437999014;
+
   static Vec3f CanonicalLocal(GPSSample point);
 
   GPSSample origin;
