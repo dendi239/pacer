@@ -42,5 +42,16 @@ if(NOT SKBUILD)
         add_executable(destructor_test destructor_test.cpp)
 
         add_executable(datparser datparser.c)
+
+        # Frame-table exporter for video overlays: replays a session through
+        # the same LiveTiming engine the dashboard uses and writes one row per
+        # video frame.
+        add_executable(export_overlay export_overlay.cpp)
+        target_link_libraries(export_overlay PRIVATE
+            pacer::geometry
+            pacer::gps-source
+            pacer::laps
+            pacer::live-timing
+            pacer::reference-track)
     endif()
 endif()
