@@ -8,15 +8,26 @@ void pacer::ReadDatFile(const char *filename, void *data,
                         DatVersion version) {
 
   FILE *f = fopen(filename, "rb");
+  if (f == nullptr) {
+    return;
+  }
 
   int64_t timestamp;
   uGnssDecUbxNavPvt_t gps;
 
-  while (!feof(f)) {
-    if (version == DatVersion::WITH_TIMESTAMP)
-      fread(&timestamp, sizeof(timestamp), 1, f);
-
-    fread(&gps, sizeof(gps), 1, f);
+  // Reads are what end the loop, not feof: feof only reports a read that has
+  // already failed, so testing it first lets one more iteration through on a
+  // whole-record file, and that iteration emits `gps` unchanged -- a verbatim
+  // duplicate of the last sample, one that a lap splitter then sees as a
+  // zero-length interval sitting on the final fix.
+  while (true) {
+    if (version == DatVersion::WITH_TIMESTAMP &&
+        fread(&timestamp, sizeof(timestamp), 1, f) != 1) {
+      break;
+    }
+    if (fread(&gps, sizeof(gps), 1, f) != 1) {
+      break;
+    }
 
     GPSSample s{
         .lat = static_cast<double>(gps.lat) / 1e7,
