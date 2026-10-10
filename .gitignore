@@ -22,3 +22,6 @@ firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/dependencies.lock
+
+# raw session recordings (kept on Google Drive)
+recordings/
