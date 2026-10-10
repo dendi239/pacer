@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.28)
 
 project(pacer)
 
+# The macOS file dialogs (pacer/ui) are Objective-C++; enabling the language
+# has to happen at the top level to be picked up by every subdirectory.
+if(APPLE AND NOT EMSCRIPTEN)
+    enable_language(OBJCXX)
+endif()
+
 # Ensure SKBUILD is defined (scikit-build sets it to true during pip install)
 if(NOT DEFINED SKBUILD)
     set(SKBUILD OFF)
