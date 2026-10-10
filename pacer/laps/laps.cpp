@@ -243,8 +243,12 @@ pacer::GPSSample pacer::Laps::GetPoint(size_t row) const {
 
 void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
   cs_ = coordinate_system;
-  // Ensure cum_point_dist_ has the same size as points_ and is initialized
-  cum_point_dist_.assign(points_.size(), 0.0);
+  // One entry per point, and a leading zero even when there are no points
+  // yet: AddPoint reads cum_point_dist_.back() for every point after the
+  // first, so an empty table here is both a read off the end of the vector
+  // and -- once it survives that -- a table shifted a point against the
+  // points it indexes, which is every distance this Laps reports.
+  cum_point_dist_.assign(points_.empty() ? 1 : points_.size(), 0.0);
   for (size_t i = 0; i + 1 < points_.size(); ++i) {
     cum_point_dist_[i + 1] =
         cum_point_dist_[i] + cs_.Distance(points_[i], points_[i + 1]);

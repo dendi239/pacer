@@ -38,6 +38,19 @@ target_link_libraries(replay_dat PRIVATE
 
 set_property(TARGET replay_dat PROPERTY FOLDER "tests")
 
+add_executable(test_laps_reload test_laps_reload.cpp)
+target_link_libraries(test_laps_reload PRIVATE
+    pacer::geometry
+    pacer::laps
+    Catch2::Catch2WithMain)
+
+add_test(
+    NAME test_laps_reload
+    COMMAND test_laps_reload
+)
+
+set_property(TARGET test_laps_reload PROPERTY FOLDER "tests")
+
 add_executable(test_tile_queue test_tile_queue.cpp)
 target_link_libraries(test_tile_queue PRIVATE
     pacer::map-tiles
