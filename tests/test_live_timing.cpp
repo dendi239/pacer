@@ -385,6 +385,45 @@ TEST_CASE("LiveTiming session clock starts with lap 1 and expires",
   REQUIRE(snap.session_remaining_s == Approx(60.0 - 80.0).margin(0.5));
 }
 
+TEST_CASE("LiveTiming::SnapshotAt runs the clocks on between samples",
+          "[live-timing]") {
+  auto cs = TestCS();
+  auto rt = MakeCircularTrack(cs);
+
+  pacer::LiveTiming lt;
+  lt.SetReferenceTrack(rt, pacer::SessionConfig{.session_length_s = 600});
+
+  // Unarmed clocks stay unarmed however far on the display asks.
+  REQUIRE(std::isnan(lt.SnapshotAt(1'000'000).session_elapsed_s));
+  REQUIRE(std::isnan(lt.SnapshotAt(1'000'000).current_lap_s));
+
+  double theta = -0.05, t = 100.0;
+  int64_t last_ms = 0;
+  Drive(cs, 40.0, 1.5, theta, t, [&](pacer::GPSSample s) {
+    lt.OnSample(s);
+    last_ms = s.timestamp_ms;
+  });
+  auto at_sample = lt.Snapshot();
+  REQUIRE(at_sample.session_started);
+
+  // A fix outage: 3 s later with no samples, both clocks have moved on by
+  // exactly that, and nothing else has.
+  auto later = lt.SnapshotAt(last_ms + 3000);
+  REQUIRE(later.session_elapsed_s == Approx(at_sample.session_elapsed_s + 3.0));
+  REQUIRE(later.session_remaining_s ==
+          Approx(at_sample.session_remaining_s - 3.0));
+  REQUIRE(later.current_lap_s == Approx(at_sample.current_lap_s + 3.0));
+  REQUIRE(later.lap_number == at_sample.lap_number);
+  REQUIRE(later.gates_crossed == at_sample.gates_crossed);
+  // Read-only: the stored snapshot is untouched.
+  REQUIRE(lt.Snapshot().session_elapsed_s == at_sample.session_elapsed_s);
+
+  // A local clock that lags the last fix never winds the clocks back.
+  auto earlier = lt.SnapshotAt(last_ms - 500);
+  REQUIRE(earlier.session_elapsed_s == Approx(at_sample.session_elapsed_s));
+  REQUIRE(earlier.current_lap_s == Approx(at_sample.current_lap_s));
+}
+
 TEST_CASE("LiveTiming::ResetSession starts a fresh session on the same track",
           "[live-timing]") {
   auto cs = TestCS();

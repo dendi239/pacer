@@ -502,6 +502,23 @@ void OnBrightnessBack(lv_event_t *) {
 }
 #endif
 
+// A tap that lands on the screen itself — i.e. outside every panel, which
+// are clickable and so swallow their own taps — dismisses whatever debug
+// panel is open. SHORT_CLICKED rather than CLICKED: LVGL still sends CLICKED
+// on the release that follows a long press, which would close the menu the
+// same gesture just opened.
+void OnScreenShortClick(lv_event_t *) {
+  ShowMenu(false);
+  ShowNextLinePage(false);
+  ShowOffsetPage(false);
+  ShowLoggingPage(false);
+  ShowGpsPage(false);
+  ShowTrackPage(false);
+#if CONFIG_PACER_LCD_BL_GPIO >= 0
+  ShowBrightnessPage(false);
+#endif
+}
+
 void OnMenuClose(lv_event_t *) { ShowMenu(false); }
 
 void OnNextLineBack(lv_event_t *) {
@@ -847,6 +864,8 @@ void BuildDebugMenu(lv_obj_t *scr) {
   BuildMapPage(scr);
 
   lv_obj_add_event_cb(scr, OnScreenLongPress, LV_EVENT_LONG_PRESSED, nullptr);
+  lv_obj_add_event_cb(scr, OnScreenShortClick, LV_EVENT_SHORT_CLICKED,
+                      nullptr);
 }
 
 void BuildScreen() {

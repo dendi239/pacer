@@ -11,3 +11,8 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 # CONFIG_LV_FONT_MONTSERRAT_48 is not set
 # Long filenames on SD (tracks/*.json have >8.3 names)
 CONFIG_FATFS_LFN_HEAP=y
+# MAX17043 fuel gauge on its own I2C bus: port 0 is the GT911 touch panel,
+# and the component's default SCL (GPIO1) is the LCD backlight.
+CONFIG_MAX17043_I2C_NUM=1
+CONFIG_MAX17043_I2C_SDA=16
+CONFIG_MAX17043_I2C_SCL=15

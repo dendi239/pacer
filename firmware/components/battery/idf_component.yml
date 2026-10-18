@@ -1,4 +1,4 @@
 dependencies:
-  idf: ">=6.2"
+  idf: ">=5.5"
   pedrominatel/max17043:
     version: '*'

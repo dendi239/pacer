@@ -55,6 +55,7 @@ void pacer::LiveTiming::ResetSession() {
   snapshot_.best_lap_s = kNaN;
   snapshot_.gate_count = gates_.size();
   session_start_time_ = 0;
+  last_sample_time_ = 0;
 }
 
 void pacer::LiveTiming::StartLap(double crossing_time) {
@@ -222,13 +223,23 @@ void pacer::LiveTiming::OnSample(GPSSample s) {
 
   // Both clocks tick on every sample once armed, including the ones
   // TrackCrossings() bails out of (parked on track, no previous fix).
-  if (snapshot_.session_started) {
-    snapshot_.session_elapsed_s = t - session_start_time_;
-    snapshot_.session_remaining_s =
-        cfg_.session_length_s - snapshot_.session_elapsed_s;
+  last_sample_time_ = t;
+  AdvanceClocks(snapshot_, t);
+}
+
+pacer::LiveSnapshot pacer::LiveTiming::SnapshotAt(int64_t timestamp_ms) const {
+  LiveSnapshot snap = snapshot_;
+  AdvanceClocks(snap, std::fmax(timestamp_ms / 1000.0, last_sample_time_));
+  return snap;
+}
+
+void pacer::LiveTiming::AdvanceClocks(LiveSnapshot &snap, double t) const {
+  if (snap.session_started) {
+    snap.session_elapsed_s = t - session_start_time_;
+    snap.session_remaining_s = cfg_.session_length_s - snap.session_elapsed_s;
   }
   if (on_lap_) {
-    snapshot_.current_lap_s = t - lap_start_time_;
+    snap.current_lap_s = t - lap_start_time_;
   }
 }
 

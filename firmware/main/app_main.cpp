@@ -3,11 +3,14 @@
 // Data flow:
 //   ubx_gps reader task --(queue)--> main loop:
 //     log to SD (.dat, same format the desktop tools read)
-//     -> LiveTiming::OnSample -> dashboard_ui at ~10 Hz
+//     -> LiveTiming::OnSample
+//   main loop, every kUiPeriodUs of device clock, fix or no fix:
+//     LiveTiming::SnapshotAt -> dashboard_ui
 //
 // On the first 2D/3D fix, the nearest /sdcard/tracks/*.json annotation is
 // loaded as the reference track; until then the screen shows fix status.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -18,37 +21,51 @@
 #include "esp_rom_sys.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "soc/rtc_cntl_reg.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "sdkconfig.h"
+#include "soc/rtc_cntl_reg.h"
 
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
 #include <pacer/live-timing/live-timing.hpp>
 #include <pacer/reference-track/reference-track.hpp>
 
+#include "battery.h"
 #include "dashboard_ui.hpp"
 #include "storage.hpp"
 #include "ubx_gps.hpp"
-#include "battery.h"
 
 namespace {
 
 const char *TAG = "pacer";
+
+// Repaint period for the timing fields. Driven by the device clock, so the
+// session and lap clocks keep ticking between fixes and through an outage.
+constexpr int64_t kUiPeriodUs = 100 * 1000;
+
+// A fix plus the device time it came off the UART. Stamped in the reader
+// task, so SD flush stalls in the consumer don't skew the device->GPS clock
+// mapping the display runs on.
+struct PvtMsg {
+  uGnssDecUbxNavPvt_t pvt;
+  int64_t received_us;
+};
 
 QueueHandle_t s_pvt_queue = nullptr;
 
 void OnPvt(const uGnssDecUbxNavPvt_t &pvt, void *) {
   // Reader task context: hand off and get back to the UART. Dropping on a
   // full queue is fine — the consumer only stalls on SD flush hiccups.
-  xQueueSend(s_pvt_queue, &pvt, 0);
+  PvtMsg msg{pvt, esp_timer_get_time()};
+  xQueueSend(s_pvt_queue, &msg, 0);
 }
 
 bool HasFix(const uGnssDecUbxNavPvt_t &pvt) {
   return pvt.fixType == U_GNSS_DEC_UBX_NAV_PVT_FIX_TYPE_2D ||
          pvt.fixType == U_GNSS_DEC_UBX_NAV_PVT_FIX_TYPE_3D ||
-         pvt.fixType == U_GNSS_DEC_UBX_NAV_PVT_FIX_TYPE_GNSS_PLUS_DEAD_RECKONING;
+         pvt.fixType ==
+             U_GNSS_DEC_UBX_NAV_PVT_FIX_TYPE_GNSS_PLUS_DEAD_RECKONING;
 }
 
 // Worth writing to the .dat? fixType alone reads 2D/3D while the solution is
@@ -146,14 +163,18 @@ extern "C" void app_main(void) {
     storage_log_open();
   }
 
-  s_pvt_queue = xQueueCreate(64, sizeof(uGnssDecUbxNavPvt_t));
+  s_pvt_queue = xQueueCreate(64, sizeof(PvtMsg));
   ESP_ERROR_CHECK(ubx_gps_start(OnPvt, nullptr));
   dashboard_ui_set_gps_config(ubx_gps_config_summary());
   dashboard_ui_set_status(sd_ok ? "waiting for gps fix..."
                                 : "NO SD CARD - waiting for gps fix...");
 
+  // Optional hardware: without a gauge the label just stays "BAT: ?".
   QueueHandle_t battery_queue = NULL;
-  battery_sensor_init(&battery_queue);
+  esp_err_t battery_err = battery_sensor_init(&battery_queue);
+  if (battery_err != ESP_OK) {
+    ESP_LOGW(TAG, "no battery gauge: %s", esp_err_to_name(battery_err));
+  }
 
   pacer::LiveTiming timing;
   bool track_loaded = false;
@@ -236,7 +257,8 @@ extern "C" void app_main(void) {
   rescan_track_list();
   dashboard_ui_set_track_list(track_list, track_path);
 
-  uGnssDecUbxNavPvt_t pvt;
+  PvtMsg msg;
+  const uGnssDecUbxNavPvt_t &pvt = msg.pvt;
   // Measured fix spacing for the debug menu's GPS page. iTOW is GPS time of
   // week in milliseconds, so consecutive deltas are the receiver's actual
   // solution rate — the one number that says whether it really sustained the
@@ -251,13 +273,42 @@ extern "C" void app_main(void) {
   // second-guessed by the nearest-track scan, even if it failed to load.
   bool auto_scan = true;
 
+  // Maps the device clock onto the GPS one LiveTiming runs on: the last
+  // sample fed to it, and the device time it arrived. The display reads the
+  // clocks at anchor + device time elapsed since, so they tick at the UI
+  // rate rather than the fix rate and don't freeze when fixes stop.
+  bool have_clock_anchor = false;
+  int64_t anchor_gps_ms = 0;
+  int64_t anchor_device_us = 0;
+  int64_t next_ui_us = 0;
+
   while (true) {
+    int64_t now_us = esp_timer_get_time();
+    if (now_us >= next_ui_us) {
+      next_ui_us = now_us + kUiPeriodUs;
+      if (track_loaded) {
+        dashboard_ui_update(
+            have_clock_anchor
+                ? timing.SnapshotAt(anchor_gps_ms +
+                                    (now_us - anchor_device_us) / 1000)
+                : timing.Snapshot());
+      }
+    }
+
+    // Sleep until the next repaint at the latest; +1 so a sub-tick remainder
+    // still blocks instead of spinning. Clamped: a repaint stuck on the LVGL
+    // lock past the deadline must not wrap into an hours-long wait.
+    int64_t wait_ms =
+        std::max<int64_t>(0, (next_ui_us - esp_timer_get_time()) / 1000);
+    TickType_t wait = pdMS_TO_TICKS(wait_ms) + 1;
+
     uint8_t battery_level = 0;
-    if (battery_queue && xQueueReceive(battery_queue, &battery_level, 0) == pdTRUE) {
+    if (battery_queue &&
+        xQueueReceive(battery_queue, &battery_level, 0) == pdTRUE) {
       dashboard_ui_set_battery_level(battery_level);
     }
 
-    if (xQueueReceive(s_pvt_queue, &pvt, pdMS_TO_TICKS(500)) != pdTRUE) {
+    if (xQueueReceive(s_pvt_queue, &msg, wait) != pdTRUE) {
       continue;
     }
 
@@ -381,11 +432,14 @@ extern "C" void app_main(void) {
     }
 
     timing.OnSample(sample);
+    have_clock_anchor = true;
+    anchor_gps_ms = sample.timestamp_ms;
+    anchor_device_us = msg.received_us;
 
-    // 25 Hz in, ~8 Hz to the screen: plenty for eyes, cheap for LVGL.
+    // Position-driven readouts: 25 Hz in, ~8 Hz to the screen. The timing
+    // fields repaint off the device clock at the top of the loop.
     if (++samples_since_ui >= 3) {
       samples_since_ui = 0;
-      dashboard_ui_update(timing.Snapshot());
       dashboard_ui_set_next_line_distance(timing.DistanceToNextLine(sample));
       // Both map calls are skipped while the page is closed.
       if (map_ready && dashboard_ui_track_map_visible()) {

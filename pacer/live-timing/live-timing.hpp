@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -145,6 +146,13 @@ public:
 
   LiveSnapshot Snapshot() const { return snapshot_; }
 
+  /// Snapshot() with the session and lap clocks run on to `timestamp_ms`
+  /// (same clock as OnSample), everything else as of the last sample. Lets
+  /// a display keep the clocks ticking between fixes — or through a fix
+  /// outage — off a local clock mapped onto the GPS one. A time before the
+  /// last sample reads as the last sample, so the clocks never step back.
+  LiveSnapshot SnapshotAt(int64_t timestamp_ms) const;
+
   /// Ground distance in meters from `s` to the next timing line to be
   /// crossed: the start/finish line while not on a lap (including before
   /// the first flying lap), else the next expected gate. NaN when no track
@@ -160,6 +168,10 @@ private:
   /// Gate/start-line bookkeeping for one sample; OnSample() wraps it with
   /// the clock updates, which must run even on the samples this skips.
   void TrackCrossings(const GPSSample &s);
+
+  /// Sets the clock fields of `snap` (session elapsed/remaining, current
+  /// lap) to their values at time `t`, in seconds; unarmed clocks stay NaN.
+  void AdvanceClocks(LiveSnapshot &snap, double t) const;
 
   void StartLap(double crossing_time);
   void FinishLap(double crossing_time);
@@ -202,6 +214,8 @@ private:
 
   LiveSnapshot snapshot_;
   double session_start_time_ = 0;
+  /// Time of the latest sample fed, in seconds; floor for SnapshotAt().
+  double last_sample_time_ = 0;
 };
 
 } // namespace pacer

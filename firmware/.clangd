@@ -1,5 +1,8 @@
 CompileFlags:
   CompilationDatabase: build  # Path to compile_commands.json
+  Remove:
+    - -f*
+    - -m*
 
 Index:
   Background: Build  # Index the project in the background
