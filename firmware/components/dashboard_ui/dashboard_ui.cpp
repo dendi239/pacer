@@ -84,6 +84,18 @@ lv_obj_t *s_gps_config_label = nullptr;
 lv_obj_t *s_brightness_page = nullptr;
 lv_obj_t *s_brightness_label = nullptr;
 lv_obj_t *s_invert_label = nullptr;
+lv_obj_t *s_gate_ext_page = nullptr;
+lv_obj_t *s_gate_ext_label = nullptr;
+lv_obj_t *s_gate_ext_slider = nullptr;
+
+// Gate extension slider, in steps of kGateExtStepM over the same 0-10 m range
+// the desktop slider offers. Half-meter steps are coarse on purpose: each is
+// ~14 px of slider travel, which a gloved thumb can actually hit.
+constexpr double kGateExtStepM = 0.5;
+constexpr int32_t kGateExtMaxSteps = 20;
+// The value the user let go of, in slider steps; -1 while nothing is pending.
+// Written by the LVGL task, consumed by the main loop.
+std::atomic<int32_t> s_gate_ext_pending{-1};
 
 // Track picker page: "Nearest (auto)" plus one tile per track the main loop
 // found on the card, each showing that track's own outline. The tiles are
@@ -368,6 +380,7 @@ void OnScreenLongPress(lv_event_t *) {
       lv_obj_has_flag(s_logging_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_gps_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_track_page, LV_OBJ_FLAG_HIDDEN) &&
+      lv_obj_has_flag(s_gate_ext_page, LV_OBJ_FLAG_HIDDEN) &&
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
       lv_obj_has_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN) &&
 #endif
@@ -502,6 +515,39 @@ void OnBrightnessBack(lv_event_t *) {
 }
 #endif
 
+void RefreshGateExtLabel() {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%.1f m",
+           lv_slider_get_value(s_gate_ext_slider) * kGateExtStepM);
+  lv_label_set_text(s_gate_ext_label, buf);
+}
+
+void ShowGateExtPage(bool show) {
+  if (show) {
+    lv_obj_remove_flag(s_gate_ext_page, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(s_gate_ext_page, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void OnMenuGateExt(lv_event_t *) {
+  ShowMenu(false);
+  ShowGateExtPage(true);
+}
+
+// The label follows the drag; the value is only handed to the main loop on
+// release, since each one rebuilds every densified gate.
+void OnGateExtSlider(lv_event_t *) { RefreshGateExtLabel(); }
+
+void OnGateExtReleased(lv_event_t *) {
+  s_gate_ext_pending = lv_slider_get_value(s_gate_ext_slider);
+}
+
+void OnGateExtBack(lv_event_t *) {
+  ShowGateExtPage(false);
+  ShowMenu(true);
+}
+
 // A tap that lands on the screen itself — i.e. outside every panel, which
 // are clickable and so swallow their own taps — dismisses whatever debug
 // panel is open. SHORT_CLICKED rather than CLICKED: LVGL still sends CLICKED
@@ -514,6 +560,7 @@ void OnScreenShortClick(lv_event_t *) {
   ShowLoggingPage(false);
   ShowGpsPage(false);
   ShowTrackPage(false);
+  ShowGateExtPage(false);
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
   ShowBrightnessPage(false);
 #endif
@@ -868,6 +915,7 @@ void BuildMenuPage(lv_obj_t *scr) {
       lv_obj_get_child(MakeMenuTile(grid, i++, "", OnMenuInvert), 0);
   RefreshInvertLabel();
   MakeMenuTile(grid, i++, "Reload track", OnMenuReload);
+  MakeMenuTile(grid, i++, "Gate extension", OnMenuGateExt);
 }
 
 void BuildDebugMenu(lv_obj_t *scr) {
@@ -906,6 +954,23 @@ void BuildDebugMenu(lv_obj_t *scr) {
                       nullptr);
   MakeButton(s_brightness_page, "Back", OnBrightnessBack);
 #endif
+
+  // How far each timing gate reaches past the annotated edges — wider
+  // catches laps run off the annotated line, too wide lets a gate reach a
+  // neighbouring stretch of track. Same slider shape as brightness.
+  s_gate_ext_page = MakePanel(scr, "GATE EXTENSION");
+  s_gate_ext_label = lv_label_create(s_gate_ext_page);
+  lv_obj_set_style_text_font(s_gate_ext_label, &pacer_font_mono_48, 0);
+  s_gate_ext_slider = lv_slider_create(s_gate_ext_page);
+  lv_obj_set_width(s_gate_ext_slider, lv_pct(90));
+  lv_obj_set_style_margin_ver(s_gate_ext_slider, 12, 0);
+  lv_slider_set_range(s_gate_ext_slider, 0, kGateExtMaxSteps);
+  lv_obj_add_event_cb(s_gate_ext_slider, OnGateExtSlider,
+                      LV_EVENT_VALUE_CHANGED, nullptr);
+  lv_obj_add_event_cb(s_gate_ext_slider, OnGateExtReleased, LV_EVENT_RELEASED,
+                      nullptr);
+  RefreshGateExtLabel();
+  MakeButton(s_gate_ext_page, "Back", OnGateExtBack);
 
   // Live state on top in the reading size, the boot-time configuration under
   // it in grey: the page exists to be read as "asked for this, getting that".
@@ -1324,6 +1389,29 @@ void dashboard_ui_set_gps_state(const DashboardGpsState &state) {
   lv_obj_set_style_text_color(s_gps_corr_label, corr_color, 0);
   lv_label_set_text(s_gps_detail_label, detail);
   lvgl_port_unlock();
+}
+
+void dashboard_ui_set_gate_extension(double meters) {
+  if (!s_disp || !s_gate_ext_slider) {
+    return;
+  }
+  int32_t steps = std::clamp<int32_t>(
+      (int32_t)std::lround(meters / kGateExtStepM), 0, kGateExtMaxSteps);
+  lvgl_port_lock(0);
+  lv_slider_set_value(s_gate_ext_slider, steps, LV_ANIM_OFF);
+  RefreshGateExtLabel();
+  lvgl_port_unlock();
+}
+
+bool dashboard_ui_consume_gate_extension(double *meters_out) {
+  int32_t steps = s_gate_ext_pending.exchange(-1);
+  if (steps < 0) {
+    return false;
+  }
+  if (meters_out) {
+    *meters_out = steps * kGateExtStepM;
+  }
+  return true;
 }
 
 bool dashboard_ui_logging_enabled() { return s_logging_enabled; }

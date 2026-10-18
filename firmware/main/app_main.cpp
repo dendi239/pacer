@@ -159,9 +159,9 @@ extern "C" void app_main(void) {
   dashboard_ui_set_status("mounting sd card...");
 
   bool sd_ok = storage_mount() == ESP_OK;
-  if (sd_ok) {
-    storage_log_open();
-  }
+  // A mounted card can still refuse the session file (full, read-only); the
+  // status line then says NO LOG instead of the toggle pretending to write.
+  bool log_ok = sd_ok && storage_log_open() == ESP_OK;
 
   s_pvt_queue = xQueueCreate(64, sizeof(PvtMsg));
   ESP_ERROR_CHECK(ubx_gps_start(OnPvt, nullptr));
@@ -192,11 +192,20 @@ extern "C" void app_main(void) {
   pacer::CoordinateSystem map_cs;
   bool map_ready = false;
 
+  // Debug menu's gate extension slider. Not part of the track file, so it
+  // applies to every track loaded from here on, and the installed track is
+  // kept (annotated gates only, a few KB) so a change can rebuild its live
+  // gates without a reload.
+  double gate_extension_m = pacer::ReferenceTrack{}.gate_extension_m;
+  pacer::ReferenceTrack loaded_rt;
+  dashboard_ui_set_gate_extension(gate_extension_m);
+
   // Installs `path` as the reference track (and its outline on the map page).
   // Throws nothing: a file that won't parse just leaves the track unloaded.
   auto load_track = [&](const std::string &path) {
     try {
       auto rt = pacer::ReferenceTrack::FromFile(path);
+      rt.gate_extension_m = gate_extension_m;
       timing.SetReferenceTrack(rt);
       track_loaded = true;
       if (!rt.segments.empty()) {
@@ -222,6 +231,7 @@ extern "C" void app_main(void) {
         dashboard_ui_set_track_map(map_gates, rt.sector_indices);
         map_ready = true;
       }
+      loaded_rt = std::move(rt);
       track_path = path;
       size_t slash = path.rfind('/');
       track_name = slash == std::string::npos ? path : path.substr(slash + 1);
@@ -308,29 +318,17 @@ extern "C" void app_main(void) {
       dashboard_ui_set_battery_level(battery_level);
     }
 
-    if (xQueueReceive(s_pvt_queue, &msg, wait) != pdTRUE) {
-      continue;
-    }
-
-    // Deltas beyond half a second are a dropped frame, a reconfigured
-    // receiver or the weekly iTOW rollover — none of which is evidence about
-    // the sustained rate, so they are left out of the average entirely.
-    if (last_itow != 0 && pvt.iTOW > last_itow && pvt.iTOW - last_itow <= 500) {
-      double delta = pvt.iTOW - last_itow;
-      fix_interval_ms =
-          fix_interval_ms == 0 ? delta : fix_interval_ms * 0.9 + delta * 0.1;
-    }
-    last_itow = pvt.iTOW;
-
     // Debug menu action: drop the track and session state, then either load
     // the track the picker named or rescan /sdcard/tracks for the nearest one
-    // on the next samples.
+    // on the next samples. Handled before waiting on the GPS, so a pick still
+    // lands while the receiver is silent or resyncing.
     std::string picked;
     if (dashboard_ui_consume_track_reload(&picked)) {
       track_loaded = false;
       track_name.clear();
       track_path.clear();
       timing = pacer::LiveTiming{};
+      loaded_rt = pacer::ReferenceTrack{};
       map_ready = false;
       dashboard_ui_set_track_map({});
       if (sd_ok) {
@@ -353,18 +351,58 @@ extern "C" void app_main(void) {
       dashboard_ui_set_track_list(track_list, track_path);
     }
 
+    // Debug menu slider: rebuild the installed track's gates at the new
+    // extension. Laps and the delta reference survive (see UpdateGates).
+    double new_extension_m = 0;
+    if (dashboard_ui_consume_gate_extension(&new_extension_m) &&
+        new_extension_m != gate_extension_m) {
+      gate_extension_m = new_extension_m;
+      ESP_LOGI(TAG, "gate extension %.1f m", gate_extension_m);
+      if (track_loaded) {
+        loaded_rt.gate_extension_m = gate_extension_m;
+        try {
+          timing.UpdateGates(loaded_rt);
+        } catch (const std::exception &e) {
+          // UpdateGates left an empty, reset session behind; say so rather
+          // than show a dashboard that silently stopped timing.
+          ESP_LOGE(TAG, "gate extension: %s", e.what());
+          std::string status = std::string("gate extension failed: ") + e.what();
+          dashboard_ui_set_status(status.c_str());
+        }
+      }
+    }
+
     // Debug menu toggle gates the log; on pause, commit what's pending so
-    // pulling the card right after is safe. Poor-quality samples are dropped
-    // rather than pausing the log: the toggle is the user's intent, this is
-    // just the receiver having a bad moment, and the session continues either
-    // way (the .dat carries its own timestamps, so a gap reads as a gap).
-    bool logging = sd_ok && dashboard_ui_logging_enabled();
+    // pulling the card right after is safe — also checked before the GPS
+    // wait, so the flush doesn't hinge on the next fix arriving.
+    bool logging = log_ok && dashboard_ui_logging_enabled();
     if (was_logging && !logging) {
       storage_log_flush();
     }
     was_logging = logging;
+
+    if (xQueueReceive(s_pvt_queue, &msg, wait) != pdTRUE) {
+      continue;
+    }
+
+    // Deltas beyond half a second are a dropped frame, a reconfigured
+    // receiver or the weekly iTOW rollover — none of which is evidence about
+    // the sustained rate, so they are left out of the average entirely.
+    if (last_itow != 0 && pvt.iTOW > last_itow && pvt.iTOW - last_itow <= 500) {
+      double delta = pvt.iTOW - last_itow;
+      fix_interval_ms =
+          fix_interval_ms == 0 ? delta : fix_interval_ms * 0.9 + delta * 0.1;
+    }
+    last_itow = pvt.iTOW;
+
+    // Poor-quality samples are dropped rather than pausing the log: the
+    // toggle is the user's intent, this is just the receiver having a bad
+    // moment, and the session continues either way (the .dat carries its own
+    // timestamps, so a gap reads as a gap). Stamped with the arrival time, not
+    // now: after an SD stall the queue drains in a burst, and dequeue time
+    // would squash those fixes together.
     if (logging && IsLogWorthy(pvt)) {
-      storage_log_append(esp_timer_get_time() / 1000, pvt);
+      storage_log_append(msg.received_us / 1000, pvt);
     }
 
     // Raw receiver state in the corner, unconditionally — the point is to
@@ -457,7 +495,7 @@ extern "C" void app_main(void) {
       char status[96];
       snprintf(status, sizeof(status), "%s | %d sats | %.0f km/h%s",
                track_name.c_str(), pvt.numSV, sample.full_speed * 3.6,
-               sd_ok ? "" : " | NO LOG");
+               log_ok ? "" : " | NO LOG");
       dashboard_ui_set_status(status);
     }
   }

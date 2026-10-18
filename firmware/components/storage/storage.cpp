@@ -25,6 +25,18 @@ FILE *s_log = nullptr;
 int s_unflushed = 0;
 size_t s_appended = 0;
 size_t s_flushed = 0;
+// Sticky: set by the first failed write/flush (card pulled, full, I/O error).
+// A short fwrite leaves a partial record that misaligns everything after it,
+// so the log stops there and s_flushed freezes at the last good fsync — the
+// logging page then shows the gap instead of counting phantom records.
+bool s_failed = false;
+
+void mark_failed(const char *what) {
+  if (!s_failed) {
+    ESP_LOGE(TAG, "log %s failed, logging stopped", what);
+  }
+  s_failed = true;
+}
 
 } // namespace
 
@@ -95,9 +107,15 @@ void storage_log_append(int64_t timestamp_ms, const uGnssDecUbxNavPvt_t &pvt) {
   if (!s_log) {
     return;
   }
-  fwrite(&timestamp_ms, sizeof(timestamp_ms), 1, s_log);
-  fwrite(&pvt, sizeof(pvt), 1, s_log);
   ++s_appended;
+  if (s_failed) {
+    return;
+  }
+  if (fwrite(&timestamp_ms, sizeof(timestamp_ms), 1, s_log) != 1 ||
+      fwrite(&pvt, sizeof(pvt), 1, s_log) != 1) {
+    mark_failed("write");
+    return;
+  }
   if (++s_unflushed >= 25) {
     storage_log_flush();
   }
@@ -108,14 +126,16 @@ size_t storage_log_appended() { return s_appended; }
 size_t storage_log_flushed() { return s_flushed; }
 
 void storage_log_flush() {
-  if (!s_log) {
+  if (!s_log || s_failed) {
     return;
   }
   // fflush alone only drains the stdio buffer; the FAT directory entry
   // (file size) is committed by fsync. Without it a hard power-off — the
   // normal way this device shuts down — leaves a 0-byte file behind.
-  fflush(s_log);
-  fsync(fileno(s_log));
+  if (fflush(s_log) != 0 || fsync(fileno(s_log)) != 0) {
+    mark_failed("flush");
+    return;
+  }
   s_flushed = s_appended;
   s_unflushed = 0;
 }

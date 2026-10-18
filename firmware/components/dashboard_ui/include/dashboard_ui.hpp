@@ -123,6 +123,16 @@ void dashboard_ui_set_gps_state(const DashboardGpsState &state);
 /// once at startup; the UI keeps no dependency on the GPS component itself.
 void dashboard_ui_set_gps_config(const char *text);
 
+/// Value shown on the debug menu's "Gate extension" slider, in meters
+/// (ReferenceTrack::gate_extension_m). Call once at startup with the value
+/// the main loop loads tracks with. Safe to call from any task.
+void dashboard_ui_set_gate_extension(double meters);
+
+/// True exactly once after the user lets go of the gate extension slider on
+/// a new value; `meters_out` gets it. The main loop polls this and rebuilds
+/// the live gates (LiveTiming::UpdateGates) without resetting the session.
+bool dashboard_ui_consume_gate_extension(double *meters_out);
+
 /// Current state of the debug menu's logging toggle (defaults to on).
 bool dashboard_ui_logging_enabled();
 

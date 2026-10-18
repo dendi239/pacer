@@ -461,3 +461,42 @@ TEST_CASE("LiveTiming::ResetSession starts a fresh session on the same track",
   REQUIRE(snap.best_lap_s == Approx(slower).margin(0.1));
   REQUIRE(snap.session_started);
 }
+
+TEST_CASE("LiveTiming::UpdateGates widens the gates without a reset",
+          "[live-timing]") {
+  auto cs = TestCS();
+  auto rt = MakeCircularTrack(cs);
+
+  pacer::LiveTiming lt;
+  lt.SetReferenceTrack(rt, pacer::SessionConfig{.session_length_s = 600});
+
+  double theta = -0.05, t = 100.0;
+  const double period = 40.0;
+  Drive(cs, period, 2.2, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  auto before = lt.Snapshot();
+  REQUIRE(before.lap_number == 3);
+  REQUIRE(before.best_lap_s == Approx(period).margin(0.1));
+
+  pacer::GPSSample here = cs.Global(pacer::Vec3f{
+      kTrackRadiusM * std::cos(theta), kTrackRadiusM * std::sin(theta), 0});
+  double half_width_before = lt.OffsetFromTrack(here)->half_width_m;
+
+  rt.gate_extension_m += 3.0;
+  lt.UpdateGates(rt);
+  {
+    auto snap = lt.Snapshot();
+    REQUIRE(snap.lap_number == before.lap_number);
+    REQUIRE(snap.gate_count == before.gate_count);
+    REQUIRE(snap.best_lap_s == before.best_lap_s);
+    REQUIRE(snap.session_started);
+    REQUIRE(lt.OffsetFromTrack(here)->half_width_m ==
+            Approx(half_width_before + 3.0).margin(0.01));
+  }
+
+  // The lap in progress finishes on the new gates and still gets a time.
+  Drive(cs, period, 1.0, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  auto snap = lt.Snapshot();
+  REQUIRE(snap.lap_number == 4);
+  REQUIRE(snap.last_lap_s == Approx(period).margin(0.1));
+  REQUIRE(snap.delta_valid);
+}

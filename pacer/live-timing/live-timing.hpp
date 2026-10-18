@@ -140,6 +140,14 @@ public:
   /// start-line crossing begins lap 1 and rearms the session clock.
   void ResetSession();
 
+  /// Rebuilds the gates from `rt` — the installed track with a tweak that
+  /// moves gate ends but not midpoints, e.g. a new gate_extension_m — while
+  /// keeping the session: laps, clocks and the delta reference carry on.
+  /// Densification spaces gates by their midpoints, so the gate count stays
+  /// put and every recorded gate time keeps its meaning. If the count does
+  /// change (a different track), this falls back to a session reset.
+  void UpdateGates(const ReferenceTrack &rt);
+
   /// Feed one GPS fix; `s.timestamp_ms` must be milliseconds on a monotonic
   /// clock consistent across the session (e.g. UBX iTOW).
   void OnSample(GPSSample s);

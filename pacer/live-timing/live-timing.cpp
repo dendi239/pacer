@@ -36,6 +36,30 @@ void pacer::LiveTiming::SetReferenceTrack(const ReferenceTrack &rt,
   ResetSession();
 }
 
+void pacer::LiveTiming::UpdateGates(const ReferenceTrack &rt) {
+  size_t old_count = gates_.size();
+
+  // Same release-first order as SetReferenceTrack: the old and new gate sets
+  // side by side are what the ESP32 heap can't afford. If the rebuild throws,
+  // the gate times no longer line up with anything, so reset before passing
+  // the error on.
+  gates_ = std::vector<Segment>{};
+  try {
+    std::vector<Segment> gates = rt.DensifiedGates();
+    for (Segment &gate : gates) {
+      gate = rt.ToGlobal(gate);
+    }
+    gates_ = std::move(gates);
+  } catch (...) {
+    ResetSession();
+    throw;
+  }
+
+  if (gates_.size() != old_count) {
+    ResetSession();
+  }
+}
+
 void pacer::LiveTiming::ResetSession() {
   has_prev_ = false;
   on_lap_ = false;
