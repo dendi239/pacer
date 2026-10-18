@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <dirent.h>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -243,4 +245,110 @@ std::vector<std::string> storage_list_tracks() {
   // the same every time it's opened.
   std::sort(paths.begin(), paths.end());
   return paths;
+}
+
+namespace {
+
+// One log record exactly as storage_log_append writes it: two fwrites, so
+// no padding between the timestamp and the PVT payload.
+constexpr size_t kRecordSize = sizeof(int64_t) + sizeof(uGnssDecUbxNavPvt_t);
+
+// Shorter logs can't hold a whole lap (LiveTiming's min_lap_s is 15 s, and
+// there is an out lap before it): 30 s at 25 Hz.
+constexpr size_t kMinRecordingRecords = 30 * 25;
+
+// "SESS_012.dat" -> 12; -1 for anything else in the directory.
+int SessionNumber(const char *name) {
+  int n = -1;
+  char ext[8] = {};
+  if (sscanf(name, "SESS_%d.%7s", &n, ext) != 2 || strcasecmp(ext, "dat")) {
+    return -1;
+  }
+  return n;
+}
+
+bool ReadTimestampAt(FILE *f, long offset, int64_t *out) {
+  return fseek(f, offset, SEEK_SET) == 0 && fread(out, sizeof(*out), 1, f) == 1;
+}
+
+} // namespace
+
+std::vector<StorageRecording> storage_list_recordings(size_t max_count) {
+  std::vector<std::pair<int, std::string>> sessions;
+  if (DIR *dir = opendir("/sdcard/pacer")) {
+    while (dirent *entry = readdir(dir)) {
+      int n = SessionNumber(entry->d_name);
+      if (n >= 0) {
+        sessions.emplace_back(n, std::string("/sdcard/pacer/") + entry->d_name);
+      }
+    }
+    closedir(dir);
+  }
+  std::sort(sessions.begin(), sessions.end(),
+            [](const auto &a, const auto &b) { return a.first > b.first; });
+
+  std::vector<StorageRecording> out;
+  for (const auto &[n, path] : sessions) {
+    if (out.size() >= max_count) {
+      break;
+    }
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+      continue;
+    }
+    size_t records = st.st_size / kRecordSize;
+    if (records < kMinRecordingRecords) {
+      continue;
+    }
+    StorageRecording rec{.path = path, .records = records};
+    // First and last timestamps plus one fix — three short reads, not a
+    // full scan. Only fix-worthy samples are logged, so any record will do.
+    if (FILE *f = fopen(path.c_str(), "rb")) {
+      int64_t first = 0, last = 0;
+      if (ReadTimestampAt(f, 0, &first) &&
+          ReadTimestampAt(f, (long)((records - 1) * kRecordSize), &last)) {
+        rec.duration_s = (last - first) / 1000.0;
+      }
+      uGnssDecUbxNavPvt_t pvt;
+      long mid = (long)((records / 2) * kRecordSize + sizeof(int64_t));
+      if (fseek(f, mid, SEEK_SET) == 0 && fread(&pvt, sizeof(pvt), 1, f) == 1) {
+        rec.lat = pvt.lat / 1e7;
+        rec.lon = pvt.lon / 1e7;
+      }
+      fclose(f);
+    }
+    out.push_back(std::move(rec));
+  }
+  return out;
+}
+
+long storage_read_recording(
+    const std::string &path,
+    const std::function<void(int64_t, const uGnssDecUbxNavPvt_t &)>
+        &on_record) {
+  FILE *f = fopen(path.c_str(), "rb");
+  if (!f) {
+    ESP_LOGE(TAG, "cannot open %s", path.c_str());
+    return -1;
+  }
+  // Whole records at a time, many per SD read: a 15 minute session is
+  // ~2 MB, and record-sized freads through newlib's small default buffer
+  // turn that into tens of thousands of SPI transactions.
+  constexpr size_t kChunkRecords = 64;
+  std::unique_ptr<uint8_t[]> buf(new uint8_t[kChunkRecords * kRecordSize]);
+  long total = 0;
+  size_t got = 0;
+  while ((got = fread(buf.get(), kRecordSize, kChunkRecords, f)) > 0) {
+    for (size_t i = 0; i < got; ++i) {
+      const uint8_t *rec = buf.get() + i * kRecordSize;
+      int64_t timestamp_ms;
+      uGnssDecUbxNavPvt_t pvt;
+      memcpy(&timestamp_ms, rec, sizeof(timestamp_ms));
+      memcpy(&pvt, rec + sizeof(timestamp_ms), sizeof(pvt));
+      on_record(timestamp_ms, pvt);
+    }
+    total += (long)got;
+  }
+  fclose(f);
+  return total;
 }

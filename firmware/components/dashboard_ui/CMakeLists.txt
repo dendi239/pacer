@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "dashboard_ui.cpp"
+         "lap_table.cpp"
          "fonts/pacer_font_mono_14.c"
          "fonts/pacer_font_mono_20.c"
          "fonts/pacer_font_mono_24.c"

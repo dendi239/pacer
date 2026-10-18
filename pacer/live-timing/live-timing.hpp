@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -66,6 +68,22 @@ struct SessionConfig {
   double resync_scan_interval_m = 5.0;
 };
 
+/// One timed lap, as LiveSnapshot::recent_laps lists them.
+struct CompletedLap {
+  /// The lap's own number. Not derivable from LiveSnapshot::lap_number:
+  /// an abandoned lap keeps its number but never gets a time.
+  int number = 0;
+  double time_s = std::numeric_limits<double>::quiet_NaN(); ///< NaN: no lap
+};
+
+/// A lap as the delta is measured against it: its time and the time since
+/// lap start at every densified gate. Tied to the gate set it was timed on,
+/// so it only means anything on a track with the same gate count.
+struct ReferenceLap {
+  double time_s = std::numeric_limits<double>::quiet_NaN();
+  std::vector<double> gate_times;
+};
+
 struct LiveSnapshot {
   /// 0 while on the out lap (start line not crossed yet), then 1, 2, ...
   int lap_number = 0;
@@ -82,16 +100,31 @@ struct LiveSnapshot {
   double last_lap_s = 0; ///< NaN until a lap is completed.
   double best_lap_s = 0; ///< NaN until a lap is completed.
 
-  /// Current lap time at the last crossed gate minus the session-best lap's
+  /// The most recently timed laps, newest first (so recent_laps[0].time_s
+  /// == last_lap_s); entries past the laps done so far have NaN times.
+  std::array<CompletedLap, 3> recent_laps{};
+
+  /// Time of the lap delta_s is measured against: the faster of the
+  /// installed reference lap (LiveTiming::SetReferenceLap) and the session
+  /// best. Without an installed one it is just best_lap_s. NaN while there
+  /// is neither.
+  double reference_lap_s = 0;
+
+  /// Current lap time at the last crossed gate minus the reference lap's
   /// time at that same gate. Only meaningful while delta_valid.
   double delta_s = 0;
 
-  /// False whenever delta_s is not a live reading: before the first
+  /// False whenever delta_s is not a live reading: before there is a
   /// reference lap, and — this is the one that matters in a race — while
   /// the tracker has lost the kart (see SessionConfig::resync_distance_m).
   /// A frozen number on screen is worse than no number, because the driver
   /// can't tell it has stopped moving.
   bool delta_valid = false;
+
+  /// Predicted time for the lap in progress if it follows the reference
+  /// lap from the last crossed gate on: that lap's time plus delta_s. At the
+  /// line it is the lap just finished. Meaningful exactly when delta_valid.
+  double expected_lap_s = 0;
 
   /// True while the tracker cannot find the kart on the gate sequence at
   /// all: in the pit lane, deep in the run-off, or riding out a fix outage.
@@ -136,16 +169,40 @@ public:
 
   /// Starts the session over on the track already installed: lap numbering,
   /// lap/session clocks and the delta reference all go back to where
-  /// SetReferenceTrack() left them, without re-parsing the track. The next
-  /// start-line crossing begins lap 1 and rearms the session clock.
+  /// SetReferenceTrack() left them — or to the installed reference lap, if
+  /// there is one — without re-parsing the track. The next start-line
+  /// crossing begins lap 1 and rearms the session clock.
   void ResetSession();
+
+  /// Installs `lap` as the delta reference every session starts from, in
+  /// place of starting with none, and starts the session over. From there it
+  /// behaves exactly like a session best already on the board: the delta is
+  /// live from the first gate of lap 1, and a fully covered session lap that
+  /// beats it takes over as the reference. best_lap_s stays this session's
+  /// own. Survives ResetSession() and UpdateGates(); SetReferenceTrack()
+  /// drops it. nullopt goes back to session-best only. Returns false, with
+  /// nothing changed, if `lap` was timed on a different gate count.
+  bool SetReferenceLap(std::optional<ReferenceLap> lap);
+
+  /// The lap installed by SetReferenceLap(), if any.
+  const std::optional<ReferenceLap> &InstalledReferenceLap() const {
+    return installed_reference_;
+  }
+
+  /// The lap the delta is currently measured against (see
+  /// LiveSnapshot::reference_lap_s), or nullopt while there is none. With no
+  /// lap installed, this is the session best — so feeding a recorded session
+  /// through a fresh LiveTiming and taking this gives its best lap, ready
+  /// for SetReferenceLap().
+  std::optional<ReferenceLap> DeltaReference() const;
 
   /// Rebuilds the gates from `rt` — the installed track with a tweak that
   /// moves gate ends but not midpoints, e.g. a new gate_extension_m — while
   /// keeping the session: laps, clocks and the delta reference carry on.
   /// Densification spaces gates by their midpoints, so the gate count stays
   /// put and every recorded gate time keeps its meaning. If the count does
-  /// change (a different track), this falls back to a session reset.
+  /// change (a different track), this falls back to a session reset and
+  /// drops the installed reference lap, whose gate times no longer line up.
   void UpdateGates(const ReferenceTrack &rt);
 
   /// Feed one GPS fix; `s.timestamp_ms` must be milliseconds on a monotonic
@@ -217,8 +274,12 @@ private:
   double distance_since_scan_m_ = 0;
 
   /// Per-gate times relative to lap start; NaN where not (yet) crossed.
+  /// reference_gate_times_ is the delta reference's, empty while there is
+  /// none; snapshot_.reference_lap_s is its lap time.
   std::vector<double> current_gate_times_;
-  std::vector<double> best_gate_times_;
+  std::vector<double> reference_gate_times_;
+
+  std::optional<ReferenceLap> installed_reference_;
 
   LiveSnapshot snapshot_;
   double session_start_time_ = 0;

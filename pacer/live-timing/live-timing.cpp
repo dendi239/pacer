@@ -1,5 +1,6 @@
 #include "live-timing.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -25,7 +26,8 @@ void pacer::LiveTiming::SetReferenceTrack(const ReferenceTrack &rt,
   // throw std::bad_alloc on the ESP32.
   gates_ = std::vector<Segment>{};
   current_gate_times_ = std::vector<double>{};
-  best_gate_times_ = std::vector<double>{};
+  reference_gate_times_ = std::vector<double>{};
+  installed_reference_.reset();
 
   std::vector<Segment> gates = rt.DensifiedGates();
   for (Segment &gate : gates) {
@@ -56,8 +58,25 @@ void pacer::LiveTiming::UpdateGates(const ReferenceTrack &rt) {
   }
 
   if (gates_.size() != old_count) {
+    installed_reference_.reset();
     ResetSession();
   }
+}
+
+bool pacer::LiveTiming::SetReferenceLap(std::optional<ReferenceLap> lap) {
+  if (lap && lap->gate_times.size() != gates_.size()) {
+    return false;
+  }
+  installed_reference_ = std::move(lap);
+  ResetSession();
+  return true;
+}
+
+std::optional<pacer::ReferenceLap> pacer::LiveTiming::DeltaReference() const {
+  if (reference_gate_times_.empty()) {
+    return std::nullopt;
+  }
+  return ReferenceLap{snapshot_.reference_lap_s, reference_gate_times_};
 }
 
 void pacer::LiveTiming::ResetSession() {
@@ -69,7 +88,12 @@ void pacer::LiveTiming::ResetSession() {
   distance_since_gate_m_ = 0;
   distance_since_scan_m_ = 0;
   current_gate_times_.assign(gates_.size(), kNaN);
-  best_gate_times_.clear();
+  // Copied, not moved: the installed lap has to be there for the next reset.
+  if (installed_reference_) {
+    reference_gate_times_ = installed_reference_->gate_times;
+  } else {
+    reference_gate_times_.clear();
+  }
 
   snapshot_ = LiveSnapshot{};
   snapshot_.session_remaining_s = kNaN;
@@ -77,6 +101,10 @@ void pacer::LiveTiming::ResetSession() {
   snapshot_.current_lap_s = kNaN;
   snapshot_.last_lap_s = kNaN;
   snapshot_.best_lap_s = kNaN;
+  snapshot_.reference_lap_s =
+      installed_reference_ ? installed_reference_->time_s : kNaN;
+  snapshot_.recent_laps.fill(CompletedLap{});
+  snapshot_.expected_lap_s = kNaN;
   snapshot_.gate_count = gates_.size();
   session_start_time_ = 0;
   last_sample_time_ = 0;
@@ -124,6 +152,9 @@ void pacer::LiveTiming::FinishLap(double crossing_time) {
   double lap_time = crossing_time - lap_start_time_;
 
   snapshot_.last_lap_s = lap_time;
+  auto &recent = snapshot_.recent_laps;
+  std::copy_backward(recent.begin(), recent.end() - 1, recent.end());
+  recent[0] = CompletedLap{snapshot_.lap_number, lap_time};
 
   // A lap qualifies as the delta reference only with full gate coverage;
   // interpolation fills small skips, so a hole means we lost sync somewhere.
@@ -135,17 +166,26 @@ void pacer::LiveTiming::FinishLap(double crossing_time) {
     }
   }
 
-  // Delta at the line is against the best as it stood when the lap was
-  // driven, so a new best flashes negative rather than 0.00.
-  if (!best_gate_times_.empty()) {
-    snapshot_.delta_s = lap_time - snapshot_.best_lap_s;
+  // Delta at the line is against the reference as it stood when the lap
+  // was driven, so a new best flashes negative rather than 0.00.
+  if (!reference_gate_times_.empty()) {
+    snapshot_.delta_s = lap_time - snapshot_.reference_lap_s;
+    snapshot_.expected_lap_s = lap_time;
     snapshot_.delta_valid = true;
   }
 
-  if (complete &&
-      (std::isnan(snapshot_.best_lap_s) || lap_time < snapshot_.best_lap_s)) {
-    best_gate_times_ = current_gate_times_;
+  if (!complete) {
+    return;
+  }
+  if (std::isnan(snapshot_.best_lap_s) || lap_time < snapshot_.best_lap_s) {
     snapshot_.best_lap_s = lap_time;
+  }
+  // Without an installed lap the reference is the session best, so this is
+  // the same test as the one above; with one, the session has to beat it.
+  if (std::isnan(snapshot_.reference_lap_s) ||
+      lap_time < snapshot_.reference_lap_s) {
+    reference_gate_times_ = current_gate_times_;
+    snapshot_.reference_lap_s = lap_time;
   }
 }
 
@@ -173,8 +213,9 @@ void pacer::LiveTiming::RecordGate(size_t gate, double crossing_time) {
   snapshot_.lost = false;
 
   snapshot_.gates_crossed = gate + 1;
-  if (gate < best_gate_times_.size()) {
-    snapshot_.delta_s = rel - best_gate_times_[gate];
+  if (gate < reference_gate_times_.size()) {
+    snapshot_.delta_s = rel - reference_gate_times_[gate];
+    snapshot_.expected_lap_s = snapshot_.reference_lap_s + snapshot_.delta_s;
     snapshot_.delta_valid = true;
   }
 }

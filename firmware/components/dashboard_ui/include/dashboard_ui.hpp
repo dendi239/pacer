@@ -4,9 +4,13 @@
 // Layout (480x272 landscape):
 //
 //   LAP 7                        8:12   <- lap number / session elapsed
-//              -0.42                    <- delta to session best, huge,
-//              48.7                        green negative / red positive
-//   LAST 48.912       BEST 48.299      <- completed lap times
+//                           L5   48.640 <- recent laps, oldest on top,
+//       -0.42               L6   49.104    dimmed (see lap_table.hpp)
+//       48.715              LAST 48.912
+//                           BEST 48.299
+//    ^ delta to the reference lap (session best, or the best lap of a
+//      recording picked in the debug menu), huge, green negative / red
+//      positive; under it the lap time if the rest of the lap matches it
 //   [status: sats / track / logging]
 
 #include <cstddef>
@@ -54,20 +58,42 @@ struct DashboardTrack {
 void dashboard_ui_set_track_list(const std::vector<DashboardTrack> &tracks,
                                  const std::string &active_path = {});
 
-/// Live value for the debug menu's "next timing line" page; NaN shows
-/// "no track". Cheap no-op while that page is closed.
-void dashboard_ui_set_next_line_distance(double meters);
+/// One entry of the debug menu's "Reference lap" picker: a session log to
+/// take the delta reference from.
+struct DashboardRecording {
+  /// Log file; handed back by dashboard_ui_consume_reference_pick. Only the
+  /// file name (minus the .dat) is shown.
+  std::string path;
+  double duration_s = 0;
+  /// The log this boot is writing: listed as "now", since its length is
+  /// out of date as soon as the list is.
+  bool live = false;
+  /// Track file the recording was most likely driven on (nearest start
+  /// line); only the name is shown. Empty: no track on the card is close.
+  std::string track_path;
+  /// Whether track_path is the track loaded now. Rows that aren't are
+  /// dimmed — picking one will find no lap on the loaded gates.
+  bool on_loaded_track = false;
+};
 
-/// True while the debug menu's "Track offset" page is open. The main loop
-/// checks this before running LiveTiming::OffsetFromTrack(), which scans
-/// every gate — no point paying for it with nobody watching.
-bool dashboard_ui_track_offset_visible();
+/// Fills the "Reference lap" page (long press -> menu -> Reference lap) with
+/// one row per recording, after the always-present "Session best" row (no
+/// recorded reference). `active_path` is drawn as the one in use, with
+/// `active_lap_s` — the reference lap it gave — next to it; pass an empty
+/// path for none. Safe to call from any task (locks LVGL).
+void dashboard_ui_set_recording_list(
+    const std::vector<DashboardRecording> &recordings,
+    const std::string &active_path = {}, double active_lap_s = 0);
 
-/// Values for the track-offset page (see pacer::TrackOffset); lateral NaN
-/// shows "no track". The offset turns red once |lateral| > half_width, i.e.
-/// the fix left the annotated track. Cheap no-op while the page is closed.
-void dashboard_ui_set_track_offset(double lateral_m, double half_width_m,
-                                   size_t gate, size_t gate_count);
+/// True exactly once after the user picks a row on the "Reference lap"
+/// page; the main loop polls this. `path_out` gets the chosen log, or an
+/// empty string for "Session best", i.e. no recorded reference.
+bool dashboard_ui_consume_reference_pick(std::string *path_out);
+
+/// Whether a track is loaded. Without one the debug menu's "Reference lap"
+/// tile is disabled: a recorded lap needs gates to be timed on. Safe to call
+/// from any task (locks LVGL).
+void dashboard_ui_set_track_loaded(bool loaded);
 
 /// Installs the track outline for the map page (long press -> "Track map"):
 /// the annotated gate segments in any local metric frame with the origin
@@ -90,38 +116,6 @@ bool dashboard_ui_track_map_visible();
 /// map re-fits so track, position and a margin stay on screen. Cheap no-op
 /// while the page is closed.
 void dashboard_ui_set_track_map_position(double x_m, double y_m);
-
-/// Live receiver state for the debug menu's "GPS" page. The page pairs this
-/// with the static configuration the firmware pushed at boot, so the two can
-/// be read against each other: `corrections` and `interval_ms` are what say
-/// whether SBAS actually locked and whether the requested rate survived it.
-struct DashboardGpsState {
-  /// uGnssDecUbxNavPvt_t::fixType (0 none, 2 2D, 3 3D, 4 GNSS+DR).
-  int fix_type = 0;
-  /// The receiver's own gnssFixOK bit — a fixType can read 3D while the
-  /// solution is still outside the configured masks.
-  bool fix_ok = false;
-  int num_sv = 0;
-  double h_acc_m = 0;
-  /// pDOP in its natural units, i.e. the PVT field already divided by 100.
-  double pdop = 0;
-  /// diffSoln: differential (SBAS/RTCM) corrections were applied.
-  bool diff_soln = false;
-  /// carrSoln: 0 none, 1 RTK float, 2 RTK fixed.
-  int carr_soln = 0;
-  /// Measured spacing between fixes; 0 until two have arrived. Compare
-  /// against the configured rate — a receiver that cannot hold the rate it
-  /// was asked for reports the shortfall here and nowhere else.
-  double interval_ms = 0;
-};
-
-/// Cheap no-op while the GPS page is closed.
-void dashboard_ui_set_gps_state(const DashboardGpsState &state);
-
-/// The boot-time configuration block on the GPS page, shown in grey under
-/// the live figures — pass ubx_gps_config_summary(). Static text, so call it
-/// once at startup; the UI keeps no dependency on the GPS component itself.
-void dashboard_ui_set_gps_config(const char *text);
 
 /// Value shown on the debug menu's "Gate extension" slider, in meters
 /// (ReferenceTrack::gate_extension_m). Call once at startup with the value

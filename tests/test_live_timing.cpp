@@ -130,6 +130,7 @@ TEST_CASE("LiveTiming delta tracks time lost to the best lap",
     auto snap = lt.Snapshot();
     REQUIRE(snap.delta_valid);
     REQUIRE(snap.delta_s == Approx((slow - fast) / 2).margin(0.15));
+    REQUIRE(snap.expected_lap_s == Approx(fast + (slow - fast) / 2).margin(0.15));
   }
 
   // Complete the slow lap: delta at the line equals the lap-time difference.
@@ -141,6 +142,12 @@ TEST_CASE("LiveTiming delta tracks time lost to the best lap",
     REQUIRE(snap.last_lap_s == Approx(slow).margin(0.1));
     REQUIRE(snap.best_lap_s == Approx(fast).margin(0.1));
     REQUIRE(snap.delta_s > 0);
+    REQUIRE(snap.expected_lap_s == Approx(snap.best_lap_s + snap.delta_s));
+    REQUIRE(snap.recent_laps[0].time_s == snap.last_lap_s);
+    REQUIRE(snap.recent_laps[0].number == 2);
+    REQUIRE(snap.recent_laps[1].time_s == Approx(fast).margin(0.1));
+    REQUIRE(snap.recent_laps[1].number == 1);
+    REQUIRE(std::isnan(snap.recent_laps[2].time_s));
   }
 }
 
@@ -446,6 +453,7 @@ TEST_CASE("LiveTiming::ResetSession starts a fresh session on the same track",
     REQUIRE(std::isnan(snap.current_lap_s));
     REQUIRE(std::isnan(snap.last_lap_s));
     REQUIRE(std::isnan(snap.best_lap_s));
+    REQUIRE(std::isnan(snap.recent_laps[0].time_s));
     REQUIRE_FALSE(snap.delta_valid);
     // The track itself survives, so timing picks up without a reload.
     REQUIRE(snap.gate_count > 0);
@@ -499,4 +507,94 @@ TEST_CASE("LiveTiming::UpdateGates widens the gates without a reset",
   REQUIRE(snap.lap_number == 4);
   REQUIRE(snap.last_lap_s == Approx(period).margin(0.1));
   REQUIRE(snap.delta_valid);
+}
+
+TEST_CASE("LiveTiming::SetReferenceLap seeds the delta before any lap",
+          "[live-timing]") {
+  auto cs = TestCS();
+  auto rt = MakeCircularTrack(cs);
+  const double recorded = 40.0, slow = 42.0, fast = 38.0;
+
+  // A "recording": its session best, taken the way the firmware takes it.
+  pacer::ReferenceLap lap;
+  {
+    pacer::LiveTiming replay;
+    replay.SetReferenceTrack(rt);
+    double theta = -0.05, t = 0.0;
+    Drive(cs, recorded, 2.02, theta, t,
+          [&](pacer::GPSSample s) { replay.OnSample(s); });
+    auto best = replay.DeltaReference();
+    REQUIRE(best);
+    REQUIRE(best->time_s == Approx(recorded).margin(0.1));
+    lap = *best;
+  }
+
+  pacer::LiveTiming lt;
+  lt.SetReferenceTrack(rt);
+  REQUIRE_FALSE(lt.DeltaReference());
+  REQUIRE(lt.SetReferenceLap(lap));
+  REQUIRE(lt.Snapshot().reference_lap_s == lap.time_s);
+
+  // Lap 1 already has a delta, against the recorded lap.
+  double theta = -0.05, t = 1000.0;
+  Drive(cs, slow, 0.52, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  {
+    auto snap = lt.Snapshot();
+    REQUIRE(snap.lap_number == 1);
+    REQUIRE(snap.delta_valid);
+    REQUIRE(snap.delta_s == Approx((slow - recorded) / 2).margin(0.15));
+    REQUIRE(std::isnan(snap.best_lap_s));
+  }
+
+  // A slower lap is the session best but doesn't displace the reference.
+  Drive(cs, slow, 0.5, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  {
+    auto snap = lt.Snapshot();
+    REQUIRE(snap.best_lap_s == Approx(slow).margin(0.1));
+    REQUIRE(snap.reference_lap_s == lap.time_s);
+    REQUIRE(snap.recent_laps[0].time_s == Approx(slow).margin(0.1));
+  }
+
+  // A faster one takes over, exactly as a new session best would.
+  Drive(cs, fast, 1.0, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  {
+    auto snap = lt.Snapshot();
+    REQUIRE(snap.best_lap_s == Approx(fast).margin(0.1));
+    REQUIRE(snap.reference_lap_s == snap.best_lap_s);
+  }
+
+  // A reset goes back to the installed lap, not to nothing.
+  lt.ResetSession();
+  REQUIRE(lt.Snapshot().reference_lap_s == lap.time_s);
+  REQUIRE(lt.DeltaReference()->gate_times == lap.gate_times);
+  // Out lap round to the line, then into lap 1.
+  Drive(cs, slow, 1.1, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  REQUIRE(lt.Snapshot().lap_number == 1);
+  REQUIRE(lt.Snapshot().delta_valid);
+
+  // Clearing it is back to session-best only.
+  REQUIRE(lt.SetReferenceLap(std::nullopt));
+  REQUIRE(std::isnan(lt.Snapshot().reference_lap_s));
+  Drive(cs, slow, 1.1, theta, t, [&](pacer::GPSSample s) { lt.OnSample(s); });
+  REQUIRE(lt.Snapshot().lap_number == 1);
+  REQUIRE_FALSE(lt.Snapshot().delta_valid);
+}
+
+TEST_CASE("LiveTiming::SetReferenceLap rejects a lap from other gates",
+          "[live-timing]") {
+  auto cs = TestCS();
+  auto rt = MakeCircularTrack(cs);
+
+  pacer::LiveTiming lt;
+  lt.SetReferenceTrack(rt);
+  pacer::ReferenceLap lap{.time_s = 40.0, .gate_times = {0.0, 1.0, 2.0}};
+  REQUIRE_FALSE(lt.SetReferenceLap(lap));
+  REQUIRE_FALSE(lt.InstalledReferenceLap());
+  REQUIRE(std::isnan(lt.Snapshot().reference_lap_s));
+
+  // And a new track drops whatever was installed.
+  lap.gate_times.assign(lt.Snapshot().gate_count, 0.0);
+  REQUIRE(lt.SetReferenceLap(lap));
+  lt.SetReferenceTrack(rt);
+  REQUIRE_FALSE(lt.InstalledReferenceLap());
 }

@@ -7,6 +7,10 @@
 //                                 DatVersion::WITH_TIMESTAMP format the
 //                                 desktop tools already read.
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -45,3 +49,31 @@ std::string storage_find_track(double lat, double lon,
 /// parsed — the picker only needs names, and a broken file reports itself
 /// when it's actually loaded.
 std::vector<std::string> storage_list_tracks();
+
+/// One session log, as storage_list_recordings finds it.
+struct StorageRecording {
+  std::string path;
+  size_t records = 0;
+  /// Last record's timestamp minus the first's: device time, so pauses in
+  /// logging count too.
+  double duration_s = 0;
+  /// Fix from the middle record, in degrees — mid-session the kart is far
+  /// likelier on track than at either end (pits, the drive there). NaN if
+  /// it couldn't be read.
+  double lat = std::numeric_limits<double>::quiet_NaN();
+  double lon = std::numeric_limits<double>::quiet_NaN();
+};
+
+/// The newest `max_count` /sdcard/pacer/SESS_NNN.dat logs, newest (highest
+/// NNN) first, skipping any too short to hold a lap — every boot opens a
+/// log, so most of the card is empty files from bench sessions. Includes
+/// the log being written right now, as far as it has been flushed.
+std::vector<StorageRecording> storage_list_recordings(size_t max_count = 24);
+
+/// Streams every whole record of a session log through `on_record`, in
+/// order; a torn record at the end (power cut mid-write) is left out.
+/// Returns the number of records read, or -1 if the file won't open.
+long storage_read_recording(
+    const std::string &path,
+    const std::function<void(int64_t timestamp_ms,
+                             const uGnssDecUbxNavPvt_t &pvt)> &on_record);
