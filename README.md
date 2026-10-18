@@ -47,6 +47,15 @@ in off your machine.
 Pushing to `main` publishes it to GitHub Pages via
 `.github/workflows/deploy-web.yml`.
 
+### desktop releases
+
+Pushing a `v*` tag builds `timeline` and `track_annotator` for Apple silicon
+and attaches the zipped `.app`s to a GitHub Release, via
+`.github/workflows/release-desktop.yml`. Running that workflow by hand builds
+the apps without releasing them. The builds are unsigned, so clear the
+quarantine flag (`xattr -dr com.apple.quarantine <app>.app`) before the first
+launch.
+
 ### what to do?
 
 There're two good places to get started:
