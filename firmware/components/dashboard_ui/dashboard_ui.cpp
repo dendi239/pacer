@@ -923,8 +923,8 @@ esp_err_t dashboard_ui_start() {
 
   esp_lcd_panel_io_handle_t io = nullptr;
   esp_lcd_panel_io_spi_config_t io_cfg = {};
-  io_cfg.cs_gpio_num = CONFIG_PACER_LCD_CS_GPIO;
-  io_cfg.dc_gpio_num = -1;
+  io_cfg.cs_gpio_num = (gpio_num_t)CONFIG_PACER_LCD_CS_GPIO;
+  io_cfg.dc_gpio_num = GPIO_NUM_NC;
   io_cfg.spi_mode = 0;
   io_cfg.pclk_hz = 32 * 1000 * 1000;
   io_cfg.trans_queue_depth = 10;
@@ -938,7 +938,7 @@ esp_err_t dashboard_ui_start() {
   nv3041a_vendor_config_t vendor_cfg = {};
   vendor_cfg.flags.use_qspi_interface = 1;
   esp_lcd_panel_dev_config_t panel_cfg = {};
-  panel_cfg.reset_gpio_num = CONFIG_PACER_LCD_RST_GPIO;
+  panel_cfg.reset_gpio_num = (gpio_num_t)CONFIG_PACER_LCD_RST_GPIO;
   panel_cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
   panel_cfg.bits_per_pixel = 16;
   panel_cfg.vendor_config = &vendor_cfg;
