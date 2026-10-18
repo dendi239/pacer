@@ -150,36 +150,26 @@ void StrapDiagTask(void *) {
   }
 }
 
-} // namespace
 
-extern "C" void app_main(void) {
-  LogStrapDiag("boot");
-  xTaskCreate(StrapDiagTask, "strap_diag", 4096, nullptr, 1, nullptr);
-  ESP_ERROR_CHECK(dashboard_ui_start());
-  dashboard_ui_set_status("mounting sd card...");
-
-  bool sd_ok = storage_mount() == ESP_OK;
+// Everything the main loop keeps between iterations, and the steps it runs
+// on each one. Single-threaded: only app_main's task touches it.
+struct App {
+  // Hardware found at startup.
+  bool sd_ok = false;
   // A mounted card can still refuse the session file (full, read-only); the
   // status line then says NO LOG instead of the toggle pretending to write.
-  bool log_ok = sd_ok && storage_log_open() == ESP_OK;
+  bool log_ok = false;
+  QueueHandle_t battery_queue = nullptr;
 
-  s_pvt_queue = xQueueCreate(64, sizeof(PvtMsg));
-  ESP_ERROR_CHECK(ubx_gps_start(OnPvt, nullptr));
-  dashboard_ui_set_gps_config(ubx_gps_config_summary());
-  dashboard_ui_set_status(sd_ok ? "waiting for gps fix..."
-                                : "NO SD CARD - waiting for gps fix...");
-
-  // Optional hardware: without a gauge the label just stays "BAT: ?".
-  QueueHandle_t battery_queue = NULL;
-  esp_err_t battery_err = battery_sensor_init(&battery_queue);
-  if (battery_err != ESP_OK) {
-    ESP_LOGW(TAG, "no battery gauge: %s", esp_err_to_name(battery_err));
-  }
-
+  // Reference track and the timing session running against it.
   pacer::LiveTiming timing;
   bool track_loaded = false;
   std::string track_name;
   std::string track_path;
+  // Cleared when the picker names a track: an explicit choice is not
+  // second-guessed by the nearest-track scan, even if it failed to load.
+  bool auto_scan = true;
+  int samples_until_scan = 1;
 
   // Entries offered by the debug menu's track picker, refreshed whenever we
   // touch the card for a reload.
@@ -198,90 +188,19 @@ extern "C" void app_main(void) {
   // gates without a reload.
   double gate_extension_m = pacer::ReferenceTrack{}.gate_extension_m;
   pacer::ReferenceTrack loaded_rt;
-  dashboard_ui_set_gate_extension(gate_extension_m);
 
-  // Installs `path` as the reference track (and its outline on the map page).
-  // Throws nothing: a file that won't parse just leaves the track unloaded.
-  auto load_track = [&](const std::string &path) {
-    try {
-      auto rt = pacer::ReferenceTrack::FromFile(path);
-      rt.gate_extension_m = gate_extension_m;
-      timing.SetReferenceTrack(rt);
-      track_loaded = true;
-      if (!rt.segments.empty()) {
-        pacer::Point median{};
-        for (const auto &seg : rt.segments) {
-          median += (seg.first + seg.second) / 2.0;
-        }
-        median /= static_cast<double>(rt.segments.size());
-        map_cs = pacer::CoordinateSystem(
-            rt.cs.Global(pacer::Vec3f{median.x, median.y, 0}));
-        // Re-express the annotated gates in the map frame; the UI draws
-        // their endpoints as the two track edges.
-        auto to_map = [&](const pacer::Point &p) {
-          return pacer::ToPoint(
-              map_cs.Local(rt.cs.Global(pacer::Vec3f{p.x, p.y, 0})));
-        };
-        std::vector<pacer::Segment> map_gates;
-        map_gates.reserve(rt.segments.size());
-        for (const auto &seg : rt.segments) {
-          map_gates.push_back(
-              pacer::Segment{to_map(seg.first), to_map(seg.second)});
-        }
-        dashboard_ui_set_track_map(map_gates, rt.sector_indices);
-        map_ready = true;
-      }
-      loaded_rt = std::move(rt);
-      track_path = path;
-      size_t slash = path.rfind('/');
-      track_name = slash == std::string::npos ? path : path.substr(slash + 1);
-      return std::string();
-    } catch (const std::exception &e) {
-      ESP_LOGE(TAG, "loading %s: %s", path.c_str(), e.what());
-      return std::string(e.what());
-    }
-  };
+  // Debug menu's log toggle, as of the last loop iteration.
+  bool logging = false;
 
-  // Re-reads the card's track files for the picker. Each one is parsed for
-  // its outline; they are small and few, and the nearest-track scan parses
-  // the same files once a second anyway.
-  auto rescan_track_list = [&] {
-    track_list.clear();
-    if (!sd_ok) {
-      return;
-    }
-    for (const std::string &path : storage_list_tracks()) {
-      DashboardTrack entry;
-      entry.path = path;
-      try {
-        entry.outline = TrackOutline(pacer::ReferenceTrack::FromFile(path));
-      } catch (const std::exception &e) {
-        // Listed anyway, without a thumbnail: seeing the name and getting a
-        // load error beats the file silently not existing.
-        ESP_LOGW(TAG, "picker: %s: %s", path.c_str(), e.what());
-      }
-      track_list.push_back(std::move(entry));
-    }
-  };
-
-  rescan_track_list();
-  dashboard_ui_set_track_list(track_list, track_path);
-
-  PvtMsg msg;
-  const uGnssDecUbxNavPvt_t &pvt = msg.pvt;
   // Measured fix spacing for the debug menu's GPS page. iTOW is GPS time of
   // week in milliseconds, so consecutive deltas are the receiver's actual
   // solution rate — the one number that says whether it really sustained the
   // rate the firmware asked for, rather than quietly falling short.
   uint32_t last_itow = 0;
   double fix_interval_ms = 0;
+
   int samples_since_ui = 0;
   int samples_since_debug = 0;
-  int samples_until_scan = 1;
-  bool was_logging = false;
-  // Cleared when the picker names a track: an explicit choice is not
-  // second-guessed by the nearest-track scan, even if it failed to load.
-  bool auto_scan = true;
 
   // Maps the device clock onto the GPS one LiveTiming runs on: the last
   // sample fed to it, and the device time it arrived. The display reads the
@@ -292,18 +211,59 @@ extern "C" void app_main(void) {
   int64_t anchor_device_us = 0;
   int64_t next_ui_us = 0;
 
+  void Start();
+  [[noreturn]] void Run();
+
+  // Main loop steps, in the order Run calls them.
+  void RepaintIfDue();
+  void PollBattery();
+  void HandleReload();
+  void HandleGateExtension();
+  void UpdateLogging();
+  void HandlePvt(const PvtMsg &msg);
+  void UpdateFixInterval(const uGnssDecUbxNavPvt_t &pvt);
+  void LogSample(const PvtMsg &msg);
+  void UpdateDiagnostics(const uGnssDecUbxNavPvt_t &pvt);
+  bool TryAutoLoadTrack(const pacer::GPSSample &sample);
+  void FeedTiming(const pacer::GPSSample &sample, int64_t received_us);
+  void UpdatePositionReadouts(const uGnssDecUbxNavPvt_t &pvt,
+                              const pacer::GPSSample &sample);
+
+  // Track helpers.
+  std::string LoadTrack(const std::string &path);
+  void UnloadTrack();
+  void RescanTrackList();
+};
+
+void App::Start() {
+  LogStrapDiag("boot");
+  xTaskCreate(StrapDiagTask, "strap_diag", 4096, nullptr, 1, nullptr);
+  ESP_ERROR_CHECK(dashboard_ui_start());
+  dashboard_ui_set_status("mounting sd card...");
+
+  sd_ok = storage_mount() == ESP_OK;
+  log_ok = sd_ok && storage_log_open() == ESP_OK;
+
+  s_pvt_queue = xQueueCreate(64, sizeof(PvtMsg));
+  ESP_ERROR_CHECK(ubx_gps_start(OnPvt, nullptr));
+  dashboard_ui_set_gps_config(ubx_gps_config_summary());
+  dashboard_ui_set_status(sd_ok ? "waiting for gps fix..."
+                                : "NO SD CARD - waiting for gps fix...");
+
+  // Optional hardware: without a gauge the label just stays "BAT: ?".
+  esp_err_t battery_err = battery_sensor_init(&battery_queue);
+  if (battery_err != ESP_OK) {
+    ESP_LOGW(TAG, "no battery gauge: %s", esp_err_to_name(battery_err));
+  }
+
+  dashboard_ui_set_gate_extension(gate_extension_m);
+  RescanTrackList();
+  dashboard_ui_set_track_list(track_list, track_path);
+}
+
+void App::Run() {
   while (true) {
-    int64_t now_us = esp_timer_get_time();
-    if (now_us >= next_ui_us) {
-      next_ui_us = now_us + kUiPeriodUs;
-      if (track_loaded) {
-        dashboard_ui_update(
-            have_clock_anchor
-                ? timing.SnapshotAt(anchor_gps_ms +
-                                    (now_us - anchor_device_us) / 1000)
-                : timing.Snapshot());
-      }
-    }
+    RepaintIfDue();
 
     // Sleep until the next repaint at the latest; +1 so a sub-tick remainder
     // still blocks instead of spinning. Clamped: a repaint stuck on the LVGL
@@ -312,191 +272,326 @@ extern "C" void app_main(void) {
         std::max<int64_t>(0, (next_ui_us - esp_timer_get_time()) / 1000);
     TickType_t wait = pdMS_TO_TICKS(wait_ms) + 1;
 
-    uint8_t battery_level = 0;
-    if (battery_queue &&
-        xQueueReceive(battery_queue, &battery_level, 0) == pdTRUE) {
-      dashboard_ui_set_battery_level(battery_level);
-    }
+    // UI-driven work comes before waiting on the GPS, so it still lands
+    // while the receiver is silent or resyncing.
+    PollBattery();
+    HandleReload();
+    HandleGateExtension();
+    UpdateLogging();
 
-    // Debug menu action: drop the track and session state, then either load
-    // the track the picker named or rescan /sdcard/tracks for the nearest one
-    // on the next samples. Handled before waiting on the GPS, so a pick still
-    // lands while the receiver is silent or resyncing.
-    std::string picked;
-    if (dashboard_ui_consume_track_reload(&picked)) {
-      track_loaded = false;
-      track_name.clear();
-      track_path.clear();
-      timing = pacer::LiveTiming{};
-      loaded_rt = pacer::ReferenceTrack{};
-      map_ready = false;
-      dashboard_ui_set_track_map({});
-      if (sd_ok) {
-        rescan_track_list();
-      }
-      samples_until_scan = 1;
-      auto_scan = picked.empty();
-      if (picked.empty()) {
-        dashboard_ui_set_status("track reload requested...");
-        ESP_LOGI(TAG, "track reload requested");
-      } else {
-        // A named track needs no fix and no scan — load it right here.
-        ESP_LOGI(TAG, "track picked: %s", picked.c_str());
-        std::string err = load_track(picked);
-        if (!err.empty()) {
-          std::string status = "cannot load " + picked + ": " + err;
-          dashboard_ui_set_status(status.c_str());
-        }
-      }
-      dashboard_ui_set_track_list(track_list, track_path);
-    }
-
-    // Debug menu slider: rebuild the installed track's gates at the new
-    // extension. Laps and the delta reference survive (see UpdateGates).
-    double new_extension_m = 0;
-    if (dashboard_ui_consume_gate_extension(&new_extension_m) &&
-        new_extension_m != gate_extension_m) {
-      gate_extension_m = new_extension_m;
-      ESP_LOGI(TAG, "gate extension %.1f m", gate_extension_m);
-      if (track_loaded) {
-        loaded_rt.gate_extension_m = gate_extension_m;
-        try {
-          timing.UpdateGates(loaded_rt);
-        } catch (const std::exception &e) {
-          // UpdateGates left an empty, reset session behind; say so rather
-          // than show a dashboard that silently stopped timing.
-          ESP_LOGE(TAG, "gate extension: %s", e.what());
-          std::string status = std::string("gate extension failed: ") + e.what();
-          dashboard_ui_set_status(status.c_str());
-        }
-      }
-    }
-
-    // Debug menu toggle gates the log; on pause, commit what's pending so
-    // pulling the card right after is safe — also checked before the GPS
-    // wait, so the flush doesn't hinge on the next fix arriving.
-    bool logging = log_ok && dashboard_ui_logging_enabled();
-    if (was_logging && !logging) {
-      storage_log_flush();
-    }
-    was_logging = logging;
-
-    if (xQueueReceive(s_pvt_queue, &msg, wait) != pdTRUE) {
-      continue;
-    }
-
-    // Deltas beyond half a second are a dropped frame, a reconfigured
-    // receiver or the weekly iTOW rollover — none of which is evidence about
-    // the sustained rate, so they are left out of the average entirely.
-    if (last_itow != 0 && pvt.iTOW > last_itow && pvt.iTOW - last_itow <= 500) {
-      double delta = pvt.iTOW - last_itow;
-      fix_interval_ms =
-          fix_interval_ms == 0 ? delta : fix_interval_ms * 0.9 + delta * 0.1;
-    }
-    last_itow = pvt.iTOW;
-
-    // Poor-quality samples are dropped rather than pausing the log: the
-    // toggle is the user's intent, this is just the receiver having a bad
-    // moment, and the session continues either way (the .dat carries its own
-    // timestamps, so a gap reads as a gap). Stamped with the arrival time, not
-    // now: after an SD stall the queue drains in a burst, and dequeue time
-    // would squash those fixes together.
-    if (logging && IsLogWorthy(pvt)) {
-      storage_log_append(msg.received_us / 1000, pvt);
-    }
-
-    // Raw receiver state in the corner, unconditionally — the point is to
-    // see what the GPS reports even before a fix or track. hAcc is here so
-    // an unexpectedly idle log counter has a visible explanation.
-    if (++samples_since_debug >= 5) {
-      samples_since_debug = 0;
-      char dbg[96];
-      snprintf(dbg, sizeof(dbg), "%.6f %.6f  %.1f km/h  %d sat  %.1f m",
-               pvt.lat / 1e7, pvt.lon / 1e7, pvt.gSpeed * 0.0036, pvt.numSV,
-               pvt.hAcc / 1000.0);
-      dashboard_ui_set_debug(dbg);
-      dashboard_ui_set_log_stats(storage_log_appended(), storage_log_flushed());
-
-      DashboardGpsState gps;
-      gps.fix_type = pvt.fixType;
-      gps.fix_ok = (pvt.flags & U_GNSS_DEC_UBX_NAV_PVT_FLAGS_GNSS_FIX_OK) != 0;
-      gps.num_sv = pvt.numSV;
-      gps.h_acc_m = pvt.hAcc / 1000.0;
-      gps.pdop = pvt.pDOP / 100.0;
-      gps.diff_soln = (pvt.flags & U_GNSS_DEC_UBX_NAV_PVT_FLAGS_DIFF_SOLN) != 0;
-      // carrSoln, bits 7:6 of flags — no named constant for it in the decoder.
-      gps.carr_soln = (pvt.flags >> 6) & 0x03;
-      gps.interval_ms = fix_interval_ms;
-      dashboard_ui_set_gps_state(gps);
-    }
-
-    if (!HasFix(pvt)) {
-      char status[64];
-      snprintf(status, sizeof(status), "no fix (%d sats)", pvt.numSV);
-      dashboard_ui_set_status(status);
-      continue;
-    }
-
-    pacer::GPSSample sample = ToSample(pvt);
-
-    if (!track_loaded) {
-      if (sd_ok && auto_scan && --samples_until_scan <= 0) {
-        samples_until_scan = 25; // rescan ~1/s, not per 25 Hz sample
-        double dist = 0;
-        std::string scan_debug;
-        std::string path =
-            storage_find_track(sample.lat, sample.lon, &dist, &scan_debug);
-        if (!path.empty()) {
-          std::string err = load_track(path);
-          if (err.empty()) {
-            // Tick the picker on whatever the scan settled on.
-            dashboard_ui_set_track_list(track_list, track_path);
-            ESP_LOGI(TAG, "using track %s (%.0f m away)", track_name.c_str(),
-                     dist);
-          } else {
-            scan_debug += "  load: " + err;
-          }
-        }
-        if (!track_loaded) {
-          std::string status = "no track | " + scan_debug;
-          dashboard_ui_set_status(status.c_str());
-        }
-      } else if (!sd_ok) {
-        dashboard_ui_set_status("fix ok - NO SD CARD");
-      }
-      if (!track_loaded) {
-        continue;
-      }
-    }
-
-    timing.OnSample(sample);
-    have_clock_anchor = true;
-    anchor_gps_ms = sample.timestamp_ms;
-    anchor_device_us = msg.received_us;
-
-    // Position-driven readouts: 25 Hz in, ~8 Hz to the screen. The timing
-    // fields repaint off the device clock at the top of the loop.
-    if (++samples_since_ui >= 3) {
-      samples_since_ui = 0;
-      dashboard_ui_set_next_line_distance(timing.DistanceToNextLine(sample));
-      // Both map calls are skipped while the page is closed.
-      if (map_ready && dashboard_ui_track_map_visible()) {
-        pacer::Vec3f local = map_cs.Local(sample);
-        dashboard_ui_set_track_map_position(local.x, local.y);
-      }
-      // Full gate scan — only worth it while that debug page is open.
-      if (dashboard_ui_track_offset_visible()) {
-        if (auto off = timing.OffsetFromTrack(sample)) {
-          dashboard_ui_set_track_offset(off->lateral_m, off->half_width_m,
-                                        off->gate,
-                                        timing.Snapshot().gate_count);
-        }
-      }
-      char status[96];
-      snprintf(status, sizeof(status), "%s | %d sats | %.0f km/h%s",
-               track_name.c_str(), pvt.numSV, sample.full_speed * 3.6,
-               log_ok ? "" : " | NO LOG");
-      dashboard_ui_set_status(status);
+    PvtMsg msg;
+    if (xQueueReceive(s_pvt_queue, &msg, wait) == pdTRUE) {
+      HandlePvt(msg);
     }
   }
+}
+
+void App::RepaintIfDue() {
+  int64_t now_us = esp_timer_get_time();
+  if (now_us < next_ui_us) {
+    return;
+  }
+  next_ui_us = now_us + kUiPeriodUs;
+  if (track_loaded) {
+    dashboard_ui_update(
+        have_clock_anchor
+            ? timing.SnapshotAt(anchor_gps_ms +
+                                (now_us - anchor_device_us) / 1000)
+            : timing.Snapshot());
+  }
+}
+
+void App::PollBattery() {
+  uint8_t battery_level = 0;
+  if (battery_queue &&
+      xQueueReceive(battery_queue, &battery_level, 0) == pdTRUE) {
+    dashboard_ui_set_battery_level(battery_level);
+  }
+}
+
+// Debug menu action: drop the track and session state, then either load the
+// track the picker named or rescan /sdcard/tracks for the nearest one on the
+// next samples.
+void App::HandleReload() {
+  std::string picked;
+  if (!dashboard_ui_consume_track_reload(&picked)) {
+    return;
+  }
+  UnloadTrack();
+  RescanTrackList();
+  samples_until_scan = 1;
+  auto_scan = picked.empty();
+  if (picked.empty()) {
+    dashboard_ui_set_status("track reload requested...");
+    ESP_LOGI(TAG, "track reload requested");
+  } else {
+    // A named track needs no fix and no scan — load it right here.
+    ESP_LOGI(TAG, "track picked: %s", picked.c_str());
+    std::string err = LoadTrack(picked);
+    if (!err.empty()) {
+      std::string status = "cannot load " + picked + ": " + err;
+      dashboard_ui_set_status(status.c_str());
+    }
+  }
+  dashboard_ui_set_track_list(track_list, track_path);
+}
+
+// Debug menu slider: rebuild the installed track's gates at the new
+// extension. Laps and the delta reference survive (see UpdateGates).
+void App::HandleGateExtension() {
+  double new_extension_m = 0;
+  if (!dashboard_ui_consume_gate_extension(&new_extension_m) ||
+      new_extension_m == gate_extension_m) {
+    return;
+  }
+  gate_extension_m = new_extension_m;
+  ESP_LOGI(TAG, "gate extension %.1f m", gate_extension_m);
+  if (!track_loaded) {
+    return;
+  }
+  loaded_rt.gate_extension_m = gate_extension_m;
+  try {
+    timing.UpdateGates(loaded_rt);
+  } catch (const std::exception &e) {
+    // UpdateGates left an empty, reset session behind; say so rather than
+    // show a dashboard that silently stopped timing.
+    ESP_LOGE(TAG, "gate extension: %s", e.what());
+    std::string status = std::string("gate extension failed: ") + e.what();
+    dashboard_ui_set_status(status.c_str());
+  }
+}
+
+// Debug menu toggle gates the log; on pause, commit what's pending so pulling
+// the card right after is safe — run before the GPS wait, so the flush
+// doesn't hinge on the next fix arriving.
+void App::UpdateLogging() {
+  bool was_logging = logging;
+  logging = log_ok && dashboard_ui_logging_enabled();
+  if (was_logging && !logging) {
+    storage_log_flush();
+  }
+}
+
+void App::HandlePvt(const PvtMsg &msg) {
+  const uGnssDecUbxNavPvt_t &pvt = msg.pvt;
+  UpdateFixInterval(pvt);
+  LogSample(msg);
+  UpdateDiagnostics(pvt);
+
+  if (!HasFix(pvt)) {
+    char status[64];
+    snprintf(status, sizeof(status), "no fix (%d sats)", pvt.numSV);
+    dashboard_ui_set_status(status);
+    return;
+  }
+
+  pacer::GPSSample sample = ToSample(pvt);
+  if (!track_loaded && !TryAutoLoadTrack(sample)) {
+    return;
+  }
+  FeedTiming(sample, msg.received_us);
+  UpdatePositionReadouts(pvt, sample);
+}
+
+// Deltas beyond half a second are a dropped frame, a reconfigured receiver or
+// the weekly iTOW rollover — none of which is evidence about the sustained
+// rate, so they are left out of the average entirely.
+void App::UpdateFixInterval(const uGnssDecUbxNavPvt_t &pvt) {
+  if (last_itow != 0 && pvt.iTOW > last_itow && pvt.iTOW - last_itow <= 500) {
+    double delta = pvt.iTOW - last_itow;
+    fix_interval_ms =
+        fix_interval_ms == 0 ? delta : fix_interval_ms * 0.9 + delta * 0.1;
+  }
+  last_itow = pvt.iTOW;
+}
+
+// Poor-quality samples are dropped rather than pausing the log: the toggle is
+// the user's intent, this is just the receiver having a bad moment, and the
+// session continues either way (the .dat carries its own timestamps, so a gap
+// reads as a gap). Stamped with the arrival time, not now: after an SD stall
+// the queue drains in a burst, and dequeue time would squash those fixes
+// together.
+void App::LogSample(const PvtMsg &msg) {
+  if (logging && IsLogWorthy(msg.pvt)) {
+    storage_log_append(msg.received_us / 1000, msg.pvt);
+  }
+}
+
+// Raw receiver state in the corner, unconditionally — the point is to see
+// what the GPS reports even before a fix or track. hAcc is here so an
+// unexpectedly idle log counter has a visible explanation.
+void App::UpdateDiagnostics(const uGnssDecUbxNavPvt_t &pvt) {
+  if (++samples_since_debug < 5) {
+    return;
+  }
+  samples_since_debug = 0;
+  char dbg[96];
+  snprintf(dbg, sizeof(dbg), "%.6f %.6f  %.1f km/h  %d sat  %.1f m",
+           pvt.lat / 1e7, pvt.lon / 1e7, pvt.gSpeed * 0.0036, pvt.numSV,
+           pvt.hAcc / 1000.0);
+  dashboard_ui_set_debug(dbg);
+  dashboard_ui_set_log_stats(storage_log_appended(), storage_log_flushed());
+
+  DashboardGpsState gps;
+  gps.fix_type = pvt.fixType;
+  gps.fix_ok = (pvt.flags & U_GNSS_DEC_UBX_NAV_PVT_FLAGS_GNSS_FIX_OK) != 0;
+  gps.num_sv = pvt.numSV;
+  gps.h_acc_m = pvt.hAcc / 1000.0;
+  gps.pdop = pvt.pDOP / 100.0;
+  gps.diff_soln = (pvt.flags & U_GNSS_DEC_UBX_NAV_PVT_FLAGS_DIFF_SOLN) != 0;
+  // carrSoln, bits 7:6 of flags — no named constant for it in the decoder.
+  gps.carr_soln = (pvt.flags >> 6) & 0x03;
+  gps.interval_ms = fix_interval_ms;
+  dashboard_ui_set_gps_state(gps);
+}
+
+// No track yet: every ~second, load the nearest one on the card. Returns
+// whether a track is installed afterwards.
+bool App::TryAutoLoadTrack(const pacer::GPSSample &sample) {
+  if (!sd_ok) {
+    dashboard_ui_set_status("fix ok - NO SD CARD");
+    return false;
+  }
+  if (!auto_scan || --samples_until_scan > 0) {
+    return false;
+  }
+  samples_until_scan = 25; // rescan ~1/s, not per 25 Hz sample
+  double dist = 0;
+  std::string scan_debug;
+  std::string path =
+      storage_find_track(sample.lat, sample.lon, &dist, &scan_debug);
+  if (!path.empty()) {
+    std::string err = LoadTrack(path);
+    if (err.empty()) {
+      // Tick the picker on whatever the scan settled on.
+      dashboard_ui_set_track_list(track_list, track_path);
+      ESP_LOGI(TAG, "using track %s (%.0f m away)", track_name.c_str(), dist);
+      return true;
+    }
+    scan_debug += "  load: " + err;
+  }
+  std::string status = "no track | " + scan_debug;
+  dashboard_ui_set_status(status.c_str());
+  return false;
+}
+
+void App::FeedTiming(const pacer::GPSSample &sample, int64_t received_us) {
+  timing.OnSample(sample);
+  have_clock_anchor = true;
+  anchor_gps_ms = sample.timestamp_ms;
+  anchor_device_us = received_us;
+}
+
+// Position-driven readouts: 25 Hz in, ~8 Hz to the screen. The timing fields
+// repaint off the device clock in RepaintIfDue.
+void App::UpdatePositionReadouts(const uGnssDecUbxNavPvt_t &pvt,
+                                 const pacer::GPSSample &sample) {
+  if (++samples_since_ui < 3) {
+    return;
+  }
+  samples_since_ui = 0;
+  dashboard_ui_set_next_line_distance(timing.DistanceToNextLine(sample));
+  // Both map calls are skipped while the page is closed.
+  if (map_ready && dashboard_ui_track_map_visible()) {
+    pacer::Vec3f local = map_cs.Local(sample);
+    dashboard_ui_set_track_map_position(local.x, local.y);
+  }
+  // Full gate scan — only worth it while that debug page is open.
+  if (dashboard_ui_track_offset_visible()) {
+    if (auto off = timing.OffsetFromTrack(sample)) {
+      dashboard_ui_set_track_offset(off->lateral_m, off->half_width_m,
+                                    off->gate, timing.Snapshot().gate_count);
+    }
+  }
+  char status[96];
+  snprintf(status, sizeof(status), "%s | %d sats | %.0f km/h%s",
+           track_name.c_str(), pvt.numSV, sample.full_speed * 3.6,
+           log_ok ? "" : " | NO LOG");
+  dashboard_ui_set_status(status);
+}
+
+// Installs `path` as the reference track (and its outline on the map page).
+// Throws nothing: a file that won't parse just leaves the track unloaded and
+// comes back as the error message; success returns "".
+std::string App::LoadTrack(const std::string &path) {
+  try {
+    auto rt = pacer::ReferenceTrack::FromFile(path);
+    rt.gate_extension_m = gate_extension_m;
+    timing.SetReferenceTrack(rt);
+    track_loaded = true;
+    if (!rt.segments.empty()) {
+      pacer::Point median{};
+      for (const auto &seg : rt.segments) {
+        median += (seg.first + seg.second) / 2.0;
+      }
+      median /= static_cast<double>(rt.segments.size());
+      map_cs = pacer::CoordinateSystem(
+          rt.cs.Global(pacer::Vec3f{median.x, median.y, 0}));
+      // Re-express the annotated gates in the map frame; the UI draws their
+      // endpoints as the two track edges.
+      auto to_map = [&](const pacer::Point &p) {
+        return pacer::ToPoint(
+            map_cs.Local(rt.cs.Global(pacer::Vec3f{p.x, p.y, 0})));
+      };
+      std::vector<pacer::Segment> map_gates;
+      map_gates.reserve(rt.segments.size());
+      for (const auto &seg : rt.segments) {
+        map_gates.push_back(
+            pacer::Segment{to_map(seg.first), to_map(seg.second)});
+      }
+      dashboard_ui_set_track_map(map_gates, rt.sector_indices);
+      map_ready = true;
+    }
+    loaded_rt = std::move(rt);
+    track_path = path;
+    size_t slash = path.rfind('/');
+    track_name = slash == std::string::npos ? path : path.substr(slash + 1);
+    return std::string();
+  } catch (const std::exception &e) {
+    ESP_LOGE(TAG, "loading %s: %s", path.c_str(), e.what());
+    return std::string(e.what());
+  }
+}
+
+// Drops the track, its map and the timing session run against it.
+void App::UnloadTrack() {
+  track_loaded = false;
+  track_name.clear();
+  track_path.clear();
+  timing = pacer::LiveTiming{};
+  loaded_rt = pacer::ReferenceTrack{};
+  map_ready = false;
+  dashboard_ui_set_track_map({});
+}
+
+// Re-reads the card's track files for the picker. Each one is parsed for its
+// outline; they are small and few, and the nearest-track scan parses the same
+// files once a second anyway.
+void App::RescanTrackList() {
+  track_list.clear();
+  if (!sd_ok) {
+    return;
+  }
+  for (const std::string &path : storage_list_tracks()) {
+    DashboardTrack entry;
+    entry.path = path;
+    try {
+      entry.outline = TrackOutline(pacer::ReferenceTrack::FromFile(path));
+    } catch (const std::exception &e) {
+      // Listed anyway, without a thumbnail: seeing the name and getting a
+      // load error beats the file silently not existing.
+      ESP_LOGW(TAG, "picker: %s: %s", path.c_str(), e.what());
+    }
+    track_list.push_back(std::move(entry));
+  }
+}
+
+} // namespace
+
+extern "C" void app_main(void) {
+  // Lives on app_main's stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE), as the
+  // locals it replaces did; Run never returns.
+  App app;
+  app.Start();
+  app.Run();
 }
