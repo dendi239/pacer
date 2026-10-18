@@ -31,6 +31,7 @@
 #include "dashboard_ui.hpp"
 #include "storage.hpp"
 #include "ubx_gps.hpp"
+#include "battery.h"
 
 namespace {
 
@@ -151,6 +152,9 @@ extern "C" void app_main(void) {
   dashboard_ui_set_status(sd_ok ? "waiting for gps fix..."
                                 : "NO SD CARD - waiting for gps fix...");
 
+  QueueHandle_t battery_queue = NULL;
+  battery_sensor_init(&battery_queue);
+
   pacer::LiveTiming timing;
   bool track_loaded = false;
   std::string track_name;
@@ -248,6 +252,11 @@ extern "C" void app_main(void) {
   bool auto_scan = true;
 
   while (true) {
+    uint8_t battery_level = 0;
+    if (battery_queue && xQueueReceive(battery_queue, &battery_level, 0) == pdTRUE) {
+      dashboard_ui_set_battery_level(battery_level);
+    }
+
     if (xQueueReceive(s_pvt_queue, &pvt, pdMS_TO_TICKS(500)) != pdTRUE) {
       continue;
     }

@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=6.2"
+  pedrominatel/max17043:
+    version: '*'

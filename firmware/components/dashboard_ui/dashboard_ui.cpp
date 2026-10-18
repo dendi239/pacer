@@ -63,6 +63,7 @@ lv_obj_t *s_last_label = nullptr;
 lv_obj_t *s_best_label = nullptr;
 lv_obj_t *s_status_label = nullptr;
 lv_obj_t *s_debug_label = nullptr;
+lv_obj_t *s_battery_label = nullptr;
 
 // Debug menu (opened by a long press anywhere on the screen).
 lv_obj_t *s_menu = nullptr;
@@ -904,6 +905,14 @@ void BuildScreen() {
   lv_obj_align(s_debug_label, LV_ALIGN_TOP_MID, 0, kTopRowH);
   lv_label_set_text(s_debug_label, "");
 
+  s_battery_label = lv_label_create(scr);
+  lv_obj_set_style_text_font(s_battery_label, &pacer_font_mono_14, 0);
+  lv_obj_set_style_text_color(s_battery_label, lv_color_hex(0x808080), 0);
+  lv_obj_set_width(s_battery_label, 100);
+  lv_obj_set_style_text_align(s_battery_label, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_align(s_battery_label, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
+  lv_label_set_text(s_battery_label, "BAT: ?");
+
   BuildDebugMenu(scr);
 }
 
@@ -1337,5 +1346,17 @@ void dashboard_ui_set_next_line_distance(double meters) {
   }
   lvgl_port_lock(0);
   lv_label_set_text(s_nextline_label, buf);
+  lvgl_port_unlock();
+}
+
+void dashboard_ui_set_battery_level(uint8_t level) {
+  if (!s_disp || !s_battery_label) {
+    return;
+  }
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "BAT: %2d%%", level);
+  lvgl_port_lock(0);
+  lv_label_set_text(s_battery_label, buf);
   lvgl_port_unlock();
 }

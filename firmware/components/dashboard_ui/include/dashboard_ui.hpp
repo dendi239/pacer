@@ -128,3 +128,5 @@ bool dashboard_ui_logging_enabled();
 
 /// Counters for the debug menu's logging page; cheap no-op while closed.
 void dashboard_ui_set_log_stats(size_t written, size_t flushed);
+
+void dashboard_ui_set_battery_level(uint8_t level);
