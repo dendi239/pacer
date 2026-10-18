@@ -999,7 +999,7 @@ esp_err_t dashboard_ui_start() {
   // GT911 touch on I2C, fed to LVGL as a pointer device.
   i2c_master_bus_handle_t i2c_bus = nullptr;
   i2c_master_bus_config_t i2c_cfg = {};
-  i2c_cfg.i2c_port = -1;
+  i2c_cfg.i2c_port = I2C_NUM_0;
   i2c_cfg.sda_io_num = (gpio_num_t)CONFIG_PACER_TOUCH_SDA_GPIO;
   i2c_cfg.scl_io_num = (gpio_num_t)CONFIG_PACER_TOUCH_SCL_GPIO;
   i2c_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
