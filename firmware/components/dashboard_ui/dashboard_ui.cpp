@@ -776,20 +776,102 @@ void BuildMapPage(lv_obj_t *scr) {
   lv_obj_add_flag(s_map_marker, LV_OBJ_FLAG_HIDDEN);
 }
 
-void BuildDebugMenu(lv_obj_t *scr) {
-  s_menu = MakePanel(scr, "DEBUG");
-  MakeButton(s_menu, "Next timing line", OnMenuNextLine);
-  MakeButton(s_menu, "Track offset", OnMenuOffset);
-  MakeButton(s_menu, "Track map", OnMenuTrackMap);
-  MakeButton(s_menu, "GPS", OnMenuGps);
-  MakeButton(s_menu, "Logging", OnMenuLogging);
+// One cell of the debug menu grid. Labels wrap rather than overflow: a 3-wide
+// grid leaves room for ~11 characters of the 20 px font per line.
+lv_obj_t *MakeMenuTile(lv_obj_t *grid, int index, const char *text,
+                       lv_event_cb_t cb) {
+  lv_obj_t *btn = lv_button_create(grid);
+  lv_obj_set_style_pad_all(btn, 4, 0);
+  lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, index % 3, 1,
+                       LV_GRID_ALIGN_STRETCH, index / 3, 1);
+  lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *label = lv_label_create(btn);
+  lv_obj_set_width(label, lv_pct(100));
+  lv_obj_set_style_text_font(label, &pacer_font_mono_20, 0);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
+  lv_label_set_text(label, text);
+  lv_obj_center(label);
+  return btn;
+}
+
+// Full-screen like the track picker: a 3x3 grid of tiles fits every entry
+// without scrolling, and the dismiss button sits in the top-right corner.
+void BuildMenuPage(lv_obj_t *scr) {
+  s_menu = lv_obj_create(scr);
+  lv_obj_set_size(s_menu, kWidth, kHeight);
+  lv_obj_set_pos(s_menu, 0, 0);
+  lv_obj_set_style_bg_color(s_menu, lv_color_hex(0x101010), 0);
+  lv_obj_set_style_border_width(s_menu, 0, 0);
+  lv_obj_set_style_radius(s_menu, 0, 0);
+  lv_obj_set_style_pad_all(s_menu, 8, 0);
+  lv_obj_set_style_pad_row(s_menu, 6, 0);
+  lv_obj_remove_flag(s_menu, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_menu, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_flex_flow(s_menu, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *header = lv_obj_create(s_menu);
+  lv_obj_set_width(header, lv_pct(100));
+  lv_obj_set_height(header, LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(header, 0, 0);
+  lv_obj_set_style_pad_all(header, 0, 0);
+  lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *title = lv_label_create(header);
+  lv_obj_set_style_text_font(title, &pacer_font_mono_20, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x808080), 0);
+  lv_label_set_text(title, "DEBUG");
+  // The header only reserves the close button's height; the button itself
+  // floats out to the very screen corner (over the page padding) so a gloved
+  // thumb can't miss it.
+  constexpr int32_t kCloseW = 96, kCloseH = 64, kPagePad = 8;
+  lv_obj_set_height(header, kCloseH - kPagePad);
+
+  // The fonts carry no LV_SYMBOL_CLOSE glyph; a plain X reads the same.
+  lv_obj_t *close = MakeButton(s_menu, "X", OnMenuClose);
+  lv_obj_add_flag(close, LV_OBJ_FLAG_FLOATING);
+  lv_obj_set_size(close, kCloseW, kCloseH);
+  lv_obj_set_style_pad_all(close, 0, 0);
+  lv_obj_set_style_text_font(lv_obj_get_child(close, 0), &pacer_font_mono_32,
+                             0);
+  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, kPagePad, -kPagePad);
+
+  static const int32_t kCols[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+                                  LV_GRID_TEMPLATE_LAST};
+  static const int32_t kRows[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+                                  LV_GRID_TEMPLATE_LAST};
+  lv_obj_t *grid = lv_obj_create(s_menu);
+  lv_obj_set_width(grid, lv_pct(100));
+  lv_obj_set_flex_grow(grid, 1);
+  lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(grid, 0, 0);
+  lv_obj_set_style_pad_all(grid, 0, 0);
+  lv_obj_set_style_pad_row(grid, 8, 0);
+  lv_obj_set_style_pad_column(grid, 8, 0);
+  lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_grid_dsc_array(grid, kCols, kRows);
+
+  int i = 0;
+  MakeMenuTile(grid, i++, "Next timing line", OnMenuNextLine);
+  MakeMenuTile(grid, i++, "Track offset", OnMenuOffset);
+  MakeMenuTile(grid, i++, "Track map", OnMenuTrackMap);
+  MakeMenuTile(grid, i++, "GPS", OnMenuGps);
+  MakeMenuTile(grid, i++, "Logging", OnMenuLogging);
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
-  MakeButton(s_menu, "Brightness", OnMenuBrightness);
+  MakeMenuTile(grid, i++, "Brightness", OnMenuBrightness);
 #endif
-  s_invert_label = lv_obj_get_child(MakeButton(s_menu, "", OnMenuInvert), 0);
+  s_invert_label =
+      lv_obj_get_child(MakeMenuTile(grid, i++, "", OnMenuInvert), 0);
   RefreshInvertLabel();
-  MakeButton(s_menu, "Reload track", OnMenuReload);
-  MakeButton(s_menu, "Close", OnMenuClose);
+  MakeMenuTile(grid, i++, "Reload track", OnMenuReload);
+}
+
+void BuildDebugMenu(lv_obj_t *scr) {
+  BuildMenuPage(scr);
 
   s_nextline_page = MakePanel(scr, "NEXT TIMING LINE");
   s_nextline_label = lv_label_create(s_nextline_page);
