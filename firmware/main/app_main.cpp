@@ -11,6 +11,10 @@
 // loaded as the reference track; until then the screen shows fix status.
 // The delta runs against the session best, or — picked from the debug menu —
 // against the best lap of a recorded session, replayed off the card.
+//
+// Demo mode (debug menu -> Demo) swaps the receiver for a recording played
+// back at its own pace times a speed multiplier: its fixes take the same path
+// through HandlePvt as live ones, while live fixes keep going to the log only.
 
 #include <algorithm>
 #include <cmath>
@@ -36,6 +40,7 @@
 
 #include "battery.h"
 #include "dashboard_ui.hpp"
+#include "demo_player.hpp"
 #include "storage.hpp"
 #include "ubx_gps.hpp"
 
@@ -209,13 +214,20 @@ struct App {
   // Debug menu's log toggle, as of the last loop iteration.
   bool logging = false;
 
+  // Recording played in place of the receiver while active.
+  DemoPlayer demo;
+  // The card's recordings as of the last PushRecordingList, for guessing
+  // which track a demo pick was driven on.
+  std::vector<StorageRecording> recordings;
+
   int samples_since_ui = 0;
   int samples_since_debug = 0;
 
   // Maps the device clock onto the GPS one LiveTiming runs on: the last
   // sample fed to it, and the device time it arrived. The display reads the
-  // clocks at anchor + device time elapsed since, so they tick at the UI
-  // rate rather than the fix rate and don't freeze when fixes stop.
+  // clocks at anchor + device time elapsed since (times the demo speed, which
+  // runs the GPS clock faster), so they tick at the UI rate rather than the
+  // fix rate and don't freeze when fixes stop.
   bool have_clock_anchor = false;
   int64_t anchor_gps_ms = 0;
   int64_t anchor_device_us = 0;
@@ -230,7 +242,10 @@ struct App {
   void HandleReload();
   void HandleReferencePick();
   void HandleGateExtension();
+  void HandleSessionReset();
   void UpdateLogging();
+  void HandleDemoPick();
+  void PumpDemo();
   void HandlePvt(const PvtMsg &msg);
   void LogSample(const PvtMsg &msg);
   void UpdateDiagnostics(const uGnssDecUbxNavPvt_t &pvt);
@@ -249,6 +264,11 @@ struct App {
   void ClearReferenceLap();
   void PushRecordingList();
   std::string GuessTrack(const StorageRecording &rec) const;
+
+  // Demo helpers.
+  void StartDemo(const std::string &path);
+  void StopDemo();
+  int ClockRate() const { return demo.active() ? demo.speed() : 1; }
 };
 
 void App::Start() {
@@ -284,8 +304,9 @@ void App::Run() {
     // Sleep until the next repaint at the latest; +1 so a sub-tick remainder
     // still blocks instead of spinning. Clamped: a repaint stuck on the LVGL
     // lock past the deadline must not wrap into an hours-long wait.
-    int64_t wait_ms =
-        std::max<int64_t>(0, (next_ui_us - esp_timer_get_time()) / 1000);
+    int64_t wait_ms = std::max<int64_t>(
+        0, (std::min(next_ui_us, demo.NextDueUs()) - esp_timer_get_time()) /
+               1000);
     TickType_t wait = pdMS_TO_TICKS(wait_ms) + 1;
 
     // UI-driven work comes before waiting on the GPS, so it still lands
@@ -294,11 +315,19 @@ void App::Run() {
     HandleReload();
     HandleReferencePick();
     HandleGateExtension();
+    HandleSessionReset();
     UpdateLogging();
+    HandleDemoPick();
+    PumpDemo();
 
+    // The receiver is logged throughout; during a demo it just doesn't
+    // drive the screen.
     PvtMsg msg;
     if (xQueueReceive(s_pvt_queue, &msg, wait) == pdTRUE) {
-      HandlePvt(msg);
+      LogSample(msg);
+      if (!demo.active()) {
+        HandlePvt(msg);
+      }
     }
   }
 }
@@ -312,8 +341,8 @@ void App::RepaintIfDue() {
   if (track_loaded) {
     dashboard_ui_update(
         have_clock_anchor
-            ? timing.SnapshotAt(anchor_gps_ms +
-                                (now_us - anchor_device_us) / 1000)
+            ? timing.SnapshotAt(anchor_gps_ms + (now_us - anchor_device_us) *
+                                                    ClockRate() / 1000)
             : timing.Snapshot());
   }
 }
@@ -411,6 +440,21 @@ void App::HandleGateExtension() {
   }
 }
 
+// Debug menu action: start the session over on the loaded track — laps,
+// session clock and best lap go; the track and a recorded reference lap stay.
+void App::HandleSessionReset() {
+  if (!dashboard_ui_consume_session_reset()) {
+    return;
+  }
+  if (!track_loaded) {
+    dashboard_ui_set_status("reset session: no track loaded");
+    return;
+  }
+  ESP_LOGI(TAG, "session reset");
+  timing.ResetSession();
+  dashboard_ui_set_status("session reset");
+}
+
 // Debug menu toggle gates the log; on pause, commit what's pending so pulling
 // the card right after is safe — run before the GPS wait, so the flush
 // doesn't hinge on the next fix arriving.
@@ -422,9 +466,70 @@ void App::UpdateLogging() {
   }
 }
 
+// Debug menu action: play a recording in place of the receiver, or (empty
+// path) go back to live GPS.
+void App::HandleDemoPick() {
+  std::string picked;
+  if (!dashboard_ui_consume_demo_pick(&picked)) {
+    return;
+  }
+  if (picked.empty()) {
+    StopDemo();
+  } else {
+    StartDemo(picked);
+  }
+  dashboard_ui_set_demo_recording(demo.path());
+}
+
+// Feeds every demo record that has come due, as if it had just come off the
+// UART, and follows the speed button.
+void App::PumpDemo() {
+  if (!demo.active()) {
+    return;
+  }
+  int64_t now_us = esp_timer_get_time();
+  int speed = dashboard_ui_demo_speed();
+  if (speed != demo.speed()) {
+    // Re-anchor at the old rate first, so the clocks on screen don't jump.
+    if (have_clock_anchor) {
+      anchor_gps_ms += (now_us - anchor_device_us) * demo.speed() / 1000;
+      anchor_device_us = now_us;
+    }
+    demo.SetSpeed(speed, now_us);
+  }
+  // Hands back to Run() at the repaint deadline even with records still due:
+  // a speed the CPU can't keep up with would otherwise keep this loop busy
+  // indefinitely, and the screen would sit frozen and then jump whole laps
+  // ahead. Falling behind instead just plays slower (see kMaxLagUs).
+  PvtMsg msg;
+  bool restarted = false;
+  int64_t due_us = 0;
+  while ((now_us = esp_timer_get_time()) < next_ui_us &&
+         demo.Poll(now_us, &msg.pvt, &due_us, &restarted)) {
+    // Anchored at when it is handled, not when it was due: while behind,
+    // the due time lags by up to kMaxLagUs, and the screen clocks would run
+    // that times the speed ahead of the last sample.
+    msg.received_us = now_us;
+    if (restarted) {
+      // Looped: the recording's clock jumps back to its start.
+      ESP_LOGI(TAG, "demo: looping %s", demo.path().c_str());
+      if (track_loaded) {
+        timing.ResetSession();
+      }
+      have_clock_anchor = false;
+    }
+    HandlePvt(msg);
+  }
+  if (!demo.active()) {
+    // Poll stops the player if the card stops answering mid-file.
+    StopDemo();
+    dashboard_ui_set_status("demo: recording unreadable");
+    dashboard_ui_set_demo_recording("");
+  }
+}
+
 void App::HandlePvt(const PvtMsg &msg) {
   const uGnssDecUbxNavPvt_t &pvt = msg.pvt;
-  LogSample(msg);
   UpdateDiagnostics(pvt);
 
   if (!HasFix(pvt)) {
@@ -458,7 +563,8 @@ void App::LogSample(const PvtMsg &msg) {
 // what the GPS reports even before a fix or track. hAcc is here so an
 // unexpectedly idle log counter has a visible explanation.
 void App::UpdateDiagnostics(const uGnssDecUbxNavPvt_t &pvt) {
-  if (++samples_since_debug < 5) {
+  // A sped-up demo delivers samples faster; keep the screen rate the same.
+  if (++samples_since_debug < 5 * ClockRate()) {
     return;
   }
   samples_since_debug = 0;
@@ -513,7 +619,7 @@ void App::FeedTiming(const pacer::GPSSample &sample, int64_t received_us) {
 // repaint off the device clock in RepaintIfDue.
 void App::UpdatePositionReadouts(const uGnssDecUbxNavPvt_t &pvt,
                                  const pacer::GPSSample &sample) {
-  if (++samples_since_ui < 3) {
+  if (++samples_since_ui < 3 * ClockRate()) {
     return;
   }
   samples_since_ui = 0;
@@ -528,10 +634,14 @@ void App::UpdatePositionReadouts(const uGnssDecUbxNavPvt_t &pvt,
   if (const auto &lap = timing.InstalledReferenceLap()) {
     snprintf(ref, sizeof(ref), " | REF %.3f", lap->time_s);
   }
-  char status[120];
-  snprintf(status, sizeof(status), "%s | %d sats | %.0f km/h%s%s",
+  char demo_tag[16] = "";
+  if (demo.active()) {
+    snprintf(demo_tag, sizeof(demo_tag), " | DEMO %dx", demo.speed());
+  }
+  char status[136];
+  snprintf(status, sizeof(status), "%s | %d sats | %.0f km/h%s%s%s",
            track_name.c_str(), pvt.numSV, sample.full_speed * 3.6, ref,
-           log_ok ? "" : " | NO LOG");
+           demo_tag, log_ok ? "" : " | NO LOG");
   dashboard_ui_set_status(status);
 }
 
@@ -682,8 +792,10 @@ void App::ClearReferenceLap() {
 // Cheap enough to redo after every pick: a stat and two short reads each.
 void App::PushRecordingList() {
   std::vector<DashboardRecording> list;
+  recordings.clear();
   if (sd_ok) {
-    for (const StorageRecording &rec : storage_list_recordings()) {
+    recordings = storage_list_recordings();
+    for (const StorageRecording &rec : recordings) {
       std::string track = GuessTrack(rec);
       list.push_back(DashboardRecording{
           .path = rec.path,
@@ -719,6 +831,56 @@ std::string App::GuessTrack(const StorageRecording &rec) const {
     }
   }
   return best ? *best : std::string();
+}
+
+// Starts `path` playing from the top, on the track it was driven on: kept if
+// that's the one loaded (so is the reference lap), loaded if the card has it,
+// and otherwise left to the nearest-track scan over the demo's own fixes.
+// Either way the session starts over.
+void App::StartDemo(const std::string &path) {
+  if (!demo.Start(path, dashboard_ui_demo_speed(), esp_timer_get_time())) {
+    // Start dropped whatever was playing; wind that down like a stop.
+    StopDemo();
+    dashboard_ui_set_status("demo: cannot read recording");
+    return;
+  }
+  ESP_LOGI(TAG, "demo: playing %s at %dx", path.c_str(), demo.speed());
+  have_clock_anchor = false;
+
+  std::string track;
+  for (const StorageRecording &rec : recordings) {
+    if (rec.path == path) {
+      track = GuessTrack(rec);
+      break;
+    }
+  }
+  if (track_loaded && track == track_path) {
+    timing.ResetSession();
+    return;
+  }
+  UnloadTrack();
+  auto_scan = track.empty();
+  samples_until_scan = 1;
+  if (!track.empty()) {
+    std::string err = LoadTrack(track);
+    if (!err.empty()) {
+      std::string status = "demo: cannot load " + track + ": " + err;
+      dashboard_ui_set_status(status.c_str());
+    }
+  }
+  dashboard_ui_set_track_list(track_list, track_path);
+  PushRecordingList();
+}
+
+// Back to the receiver. The track stays; the session starts over, since its
+// laps were the recording's.
+void App::StopDemo() {
+  demo.Stop();
+  if (track_loaded) {
+    timing.ResetSession();
+  }
+  have_clock_anchor = false;
+  dashboard_ui_set_status("demo stopped");
 }
 
 } // namespace

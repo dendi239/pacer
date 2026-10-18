@@ -24,14 +24,16 @@ if [[ ! -f "$kAwesome" ]]; then
 fi
 
 # gen <size> [extra lv_font_conv args...]
+# kRange may be overridden per call to trim a face to the glyphs it draws.
 gen() {
   local size=$1
   shift
+  local range=${kRange:-0x20-0x7F}
   echo "pacer_font_mono_${size}.c"
   npx --yes lv_font_conv@1.5.3 \
     --format lvgl --bpp 4 --no-compress --no-prefilter --no-kerning \
     --lv-include lvgl.h \
-    --size "$size" --font "$kFont" --range '0x20-0x7F' "$@" \
+    --size "$size" --font "$kFont" --range "$range" "$@" \
     --output "pacer_font_mono_${size}.c"
 }
 
@@ -40,3 +42,5 @@ gen 20
 gen 24
 gen 32 --font "$kAwesome" --range 0xF124
 gen 48
+# Delta only: space, sign, decimal point and digits keep the 72 px face small.
+kRange='0x20,0x2B-0x39' gen 72

@@ -102,7 +102,7 @@ struct LiveSnapshot {
 
   /// The most recently timed laps, newest first (so recent_laps[0].time_s
   /// == last_lap_s); entries past the laps done so far have NaN times.
-  std::array<CompletedLap, 3> recent_laps{};
+  std::array<CompletedLap, 5> recent_laps{};
 
   /// Time of the lap delta_s is measured against: the faster of the
   /// installed reference lap (LiveTiming::SetReferenceLap) and the session

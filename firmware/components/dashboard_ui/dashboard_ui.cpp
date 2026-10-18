@@ -5,6 +5,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -110,18 +112,37 @@ constexpr int32_t kTileH = 100;
 constexpr int32_t kThumbW = 128;
 constexpr int32_t kThumbH = 64;
 
-// Reference lap picker: "Session best" plus one row per recording the main
-// loop found on the card. Rows are rebuilt on every
-// dashboard_ui_set_recording_list; a row's user_data is its index into
-// s_recordings (kReferencePickNone for the session-best row). LVGL task only.
-lv_obj_t *s_reference_page = nullptr;
-lv_obj_t *s_reference_list = nullptr;
+// Recording picker, shared by the "Reference lap" and "Demo" menu entries:
+// a first row for "none" ("Session best" / "Live GPS") plus one row per
+// recording the main loop found on the card. One page rather than two so
+// only one set of rows ever sits in the LVGL pool (see InitReferenceStyles).
+// Rows are rebuilt on every dashboard_ui_set_recording_list and whenever the
+// page opens; a row's user_data is its index into s_recordings
+// (kRecordingPickNone for the first row). LVGL task only.
+enum class RecordingMode { kReference, kDemo };
+RecordingMode s_recording_mode = RecordingMode::kReference;
+lv_obj_t *s_recording_page = nullptr;
+lv_obj_t *s_recording_title = nullptr;
+lv_obj_t *s_recording_list = nullptr;
 std::vector<DashboardRecording> s_recordings;
-constexpr intptr_t kReferencePickNone = -1;
+constexpr intptr_t kRecordingPickNone = -1;
+// What each mode marks as in use, as the main loop last reported it.
+std::string s_reference_active_path;
+double s_reference_active_lap_s = 0;
+std::string s_demo_active_path;
 std::atomic<bool> s_reference_request{false};
 // The recording picked alongside s_reference_request (empty = none). Written
 // from the LVGL task, read by the main loop under the LVGL lock.
 std::string s_reference_path;
+// Same pair for the demo picker (empty = stop the demo).
+std::atomic<bool> s_demo_request{false};
+std::string s_demo_path;
+
+// Demo playback speed: the header button steps through these. Read by the
+// main loop without the lock, so it can change mid-demo.
+constexpr int kDemoSpeeds[] = {1, 2, 4, 8, 16};
+std::atomic<int> s_demo_speed{1};
+lv_obj_t *s_demo_speed_btn = nullptr;
 
 // Panel-level color inversion (INVON/INVOFF); the Kconfig option only picks
 // the value it starts at. Touched from the LVGL task only.
@@ -152,6 +173,32 @@ pacer::Point s_map_pos{};
 // reaching a sector-split gate keeps the old color, the next one advances.
 std::vector<uint8_t> s_map_quad_sector;
 
+// Zoomed view of the map page, for tuning the gate extension: a fixed scale
+// centered on the kart (the start line before the first fix) plus however
+// far it was dragged, with the timing lines — each annotated gate pushed
+// out past both edges, the way ReferenceTrack::TimingLine does — drawn over
+// the track, and a slider under it. The overview's fit-everything scale
+// makes a few meters of extension a pixel or two.
+constexpr double kMapZoomPxPerM = 6.0; // 80 m across the screen
+// Finger travel (px, |dx|+|dy|) past which a press on the zoomed map is a
+// drag, and its release no longer counts as the tap that leaves the page.
+constexpr int32_t kMapDragSlopPx = 8;
+bool s_map_zoomed = false;
+pacer::Point s_map_pan{};
+int32_t s_map_drag_px = 0;
+bool s_map_dragged = false;
+lv_obj_t *s_map_zoom_btn = nullptr;
+lv_obj_t *s_map_fit_btn = nullptr;
+lv_obj_t *s_map_follow_btn = nullptr;
+lv_obj_t *s_map_ext_bar = nullptr;
+lv_obj_t *s_map_ext_slider = nullptr;
+lv_obj_t *s_map_ext_label = nullptr;
+// Timing line endpoints in screen pixels, with the closing point at index n
+// like s_map_left_px; only kept up to date while zoomed.
+std::vector<lv_point_precise_t> s_map_ext_first_px, s_map_ext_second_px;
+// Timing lines and their envelope, in the amber the desktop timing lines use.
+const lv_color_t kMapTimingColor = lv_color_hex(0xE0A030);
+
 // track_annotator's kSectorColors pre-blended at their alpha (160/255) onto
 // its dark map background, so the opaque LVGL triangles look the same
 // without any per-pixel blending.
@@ -165,6 +212,7 @@ std::atomic<bool> s_reload_request{false};
 // The track picked alongside s_reload_request (empty = nearest/auto). Written
 // from the LVGL task, read by the main loop under the LVGL lock.
 std::string s_reload_path;
+std::atomic<bool> s_reset_request{false};
 std::atomic<bool> s_logging_enabled{true};
 
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
@@ -214,11 +262,11 @@ void ShowTrackPage(bool show) {
   }
 }
 
-void ShowReferencePage(bool show) {
+void ShowRecordingPage(bool show) {
   if (show) {
-    lv_obj_remove_flag(s_reference_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_recording_page, LV_OBJ_FLAG_HIDDEN);
   } else {
-    lv_obj_add_flag(s_reference_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_recording_page, LV_OBJ_FLAG_HIDDEN);
   }
 }
 
@@ -230,12 +278,31 @@ void ShowMapPage(bool show) {
   }
 }
 
+// The value on the gate extension sliders (both show the same one).
+double GateExtM() {
+  return s_gate_ext_slider ? lv_slider_get_value(s_gate_ext_slider) * kGateExtStepM
+                           : 0.0;
+}
+
+// Overview: just the way into the zoomed view. Zoomed: the way back, the
+// recenter button once the map was dragged off the kart, and the slider bar.
+void RefreshMapChrome(bool have_track) {
+  bool zoomed = have_track && s_map_zoomed;
+  lv_obj_set_hidden(s_map_zoom_btn, !have_track || s_map_zoomed);
+  lv_obj_set_hidden(s_map_fit_btn, !zoomed);
+  lv_obj_set_hidden(s_map_ext_bar, !zoomed);
+  lv_obj_set_hidden(s_map_follow_btn,
+                    !zoomed || (s_map_pan.x == 0 && s_map_pan.y == 0));
+}
+
 // Projects the meter-space outline (plus the current position, if any) into
-// screen pixels: bounding box of everything, a margin, uniform scale to fit,
-// centered, north up (screen y grows down, so y is flipped). Caller holds
-// the LVGL lock.
+// screen pixels, north up (screen y grows down, so y is flipped). Overview:
+// bounding box of everything, a margin, uniform scale to fit, centered.
+// Zoomed: kMapZoomPxPerM around the kart, see s_map_zoomed. Caller holds the
+// LVGL lock.
 void RedrawMap() {
   size_t n = s_map_edge_first.size();
+  RefreshMapChrome(n >= 2);
   if (n < 2) {
     lv_obj_remove_flag(s_map_empty_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_map_left_line, LV_OBJ_FLAG_HIDDEN);
@@ -245,31 +312,43 @@ void RedrawMap() {
     return;
   }
 
-  double min_x = s_map_pos.x, max_x = s_map_pos.x;
-  double min_y = s_map_pos.y, max_y = s_map_pos.y;
-  bool first = !s_map_have_pos;
-  for (const auto &edge : {&s_map_edge_first, &s_map_edge_second}) {
-    for (const pacer::Point &p : *edge) {
-      if (first) {
-        min_x = max_x = p.x;
-        min_y = max_y = p.y;
-        first = false;
-        continue;
+  double scale, cx, cy;
+  if (s_map_zoomed) {
+    pacer::Point center =
+        s_map_have_pos ? s_map_pos
+                       : (s_map_edge_first[0] + s_map_edge_second[0]) / 2.0;
+    center += s_map_pan;
+    scale = kMapZoomPxPerM;
+    cx = center.x;
+    cy = center.y;
+  } else {
+    double min_x = s_map_pos.x, max_x = s_map_pos.x;
+    double min_y = s_map_pos.y, max_y = s_map_pos.y;
+    bool first = !s_map_have_pos;
+    for (const auto &edge : {&s_map_edge_first, &s_map_edge_second}) {
+      for (const pacer::Point &p : *edge) {
+        if (first) {
+          min_x = max_x = p.x;
+          min_y = max_y = p.y;
+          first = false;
+          continue;
+        }
+        min_x = std::min(min_x, p.x);
+        max_x = std::max(max_x, p.x);
+        min_y = std::min(min_y, p.y);
+        max_y = std::max(max_y, p.y);
       }
-      min_x = std::min(min_x, p.x);
-      max_x = std::max(max_x, p.x);
-      min_y = std::min(min_y, p.y);
-      max_y = std::max(max_y, p.y);
     }
-  }
 
-  constexpr double kMarginPx = 14.0;
-  // A parked kart's bbox can degenerate to a point; keep the scale finite.
-  double span_x = std::max(max_x - min_x, 1.0);
-  double span_y = std::max(max_y - min_y, 1.0);
-  double scale = std::min((kWidth - 2 * kMarginPx) / span_x,
-                          (kHeight - 2 * kMarginPx) / span_y);
-  double cx = (min_x + max_x) / 2, cy = (min_y + max_y) / 2;
+    constexpr double kMarginPx = 14.0;
+    // A parked kart's bbox can degenerate to a point; keep the scale finite.
+    double span_x = std::max(max_x - min_x, 1.0);
+    double span_y = std::max(max_y - min_y, 1.0);
+    scale = std::min((kWidth - 2 * kMarginPx) / span_x,
+                     (kHeight - 2 * kMarginPx) / span_y);
+    cx = (min_x + max_x) / 2;
+    cy = (min_y + max_y) / 2;
+  }
   auto to_px = [&](const pacer::Point &p) {
     lv_point_precise_t px;
     px.x = (lv_value_precise_t)(kWidth / 2.0 + (p.x - cx) * scale);
@@ -294,6 +373,23 @@ void RedrawMap() {
   s_map_start_px[1] = to_px(s_map_edge_second[0]);
   lv_line_set_points(s_map_start_line, s_map_start_px, 2);
 
+  if (s_map_zoomed) {
+    double ext = GateExtM();
+    s_map_ext_first_px.resize(n + 1);
+    s_map_ext_second_px.resize(n + 1);
+    for (size_t i = 0; i < n; ++i) {
+      const pacer::Point &a = s_map_edge_first[i];
+      const pacer::Point &b = s_map_edge_second[i];
+      pacer::Point dir = b - a;
+      double length = std::sqrt(dir.Norm());
+      dir = length < 1e-9 ? pacer::Point{0, 0} : dir / length;
+      s_map_ext_first_px[i] = to_px(a - dir * ext);
+      s_map_ext_second_px[i] = to_px(b + dir * ext);
+    }
+    s_map_ext_first_px[n] = s_map_ext_first_px[0];
+    s_map_ext_second_px[n] = s_map_ext_second_px[0];
+  }
+
   lv_obj_add_flag(s_map_empty_label, LV_OBJ_FLAG_HIDDEN);
   lv_obj_remove_flag(s_map_left_line, LV_OBJ_FLAG_HIDDEN);
   lv_obj_remove_flag(s_map_right_line, LV_OBJ_FLAG_HIDDEN);
@@ -313,12 +409,35 @@ void RedrawMap() {
   lv_obj_invalidate(s_map_page);
 }
 
+// Whether the bounding box of `pts` touches the screen: zoomed in, most of
+// the track is off it, and there is no point queueing draw tasks for that.
+bool OnScreen(std::initializer_list<lv_point_precise_t> pts) {
+  bool left = true, right = true, above = true, below = true;
+  for (const lv_point_precise_t &p : pts) {
+    left = left && p.x < 0;
+    right = right && p.x >= kWidth;
+    above = above && p.y < 0;
+    below = below && p.y >= kHeight;
+  }
+  return !(left || right || above || below);
+}
+
+void DrawMapLine(lv_layer_t *layer, lv_draw_line_dsc_t *dsc,
+                 const lv_point_precise_t &p1, const lv_point_precise_t &p2) {
+  if (!OnScreen({p1, p2})) {
+    return;
+  }
+  dsc->p1 = p1;
+  dsc->p2 = p2;
+  lv_draw_line(layer, dsc);
+}
+
 // LV_EVENT_DRAW_MAIN on the map page: the annotator's infill, one quad
 // between each consecutive pair of gates plus the wraparound one (a loaded
 // track is always closed), each fanned into two triangles from its first
 // vertex exactly like ImGui's AddConvexPolyFilled. Runs after the page
 // background but before the children, so the edge lines, start line and
-// marker stay on top.
+// marker stay on top. Zoomed in, the timing lines go over the infill too.
 void OnMapDraw(lv_event_t *e) {
   size_t n = s_map_edge_first.size();
   if (n < 2 || s_map_left_px.size() != n + 1 ||
@@ -333,6 +452,9 @@ void OnMapDraw(lv_event_t *e) {
     const lv_point_precise_t &b0 = s_map_right_px[i];
     const lv_point_precise_t &b1 = s_map_right_px[i + 1];
     const lv_point_precise_t &a1 = s_map_left_px[i + 1];
+    if (!OnScreen({a0, b0, b1, a1})) {
+      continue;
+    }
 
     lv_draw_triangle_dsc_t dsc;
     lv_draw_triangle_dsc_init(&dsc);
@@ -345,6 +467,27 @@ void OnMapDraw(lv_event_t *e) {
     dsc.p[1] = b1;
     dsc.p[2] = a1;
     lv_draw_triangle(layer, &dsc);
+  }
+
+  if (!s_map_zoomed || s_map_ext_first_px.size() != n + 1) {
+    return;
+  }
+  // Each timing line, and the envelope through their ends: the densified
+  // gates interpolate between consecutive timing lines, so that envelope is
+  // how far off the annotated edges a lap still gets timed.
+  lv_draw_line_dsc_t line;
+  lv_draw_line_dsc_init(&line);
+  line.color = kMapTimingColor;
+  line.opa = LV_OPA_COVER;
+  line.width = 1;
+  for (size_t i = 0; i < n; ++i) {
+    DrawMapLine(layer, &line, s_map_ext_first_px[i], s_map_ext_first_px[i + 1]);
+    DrawMapLine(layer, &line, s_map_ext_second_px[i],
+                s_map_ext_second_px[i + 1]);
+  }
+  line.width = 3;
+  for (size_t i = 0; i < n; ++i) {
+    DrawMapLine(layer, &line, s_map_ext_first_px[i], s_map_ext_second_px[i]);
   }
 }
 
@@ -366,7 +509,7 @@ void OnScreenLongPress(lv_event_t *) {
   if (lv_obj_has_flag(s_menu, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_logging_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_track_page, LV_OBJ_FLAG_HIDDEN) &&
-      lv_obj_has_flag(s_reference_page, LV_OBJ_FLAG_HIDDEN) &&
+      lv_obj_has_flag(s_recording_page, LV_OBJ_FLAG_HIDDEN) &&
       lv_obj_has_flag(s_gate_ext_page, LV_OBJ_FLAG_HIDDEN) &&
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
       lv_obj_has_flag(s_brightness_page, LV_OBJ_FLAG_HIDDEN) &&
@@ -376,16 +519,61 @@ void OnScreenLongPress(lv_event_t *) {
   }
 }
 
+// Opens in whichever view it was left in, but back on the kart.
 void OnMenuTrackMap(lv_event_t *) {
   ShowMenu(false);
+  s_map_pan = pacer::Point{0, 0};
+  RedrawMap();
   ShowMapPage(true);
 }
 
-// The map is full-screen with no chrome; a tap anywhere backs out to the
-// menu.
+// The map is full-screen; a tap anywhere off its few buttons backs out to
+// the menu — unless it was the end of a drag on the zoomed map.
 void OnMapClicked(lv_event_t *) {
+  if (s_map_dragged) {
+    return;
+  }
   ShowMapPage(false);
   ShowMenu(true);
+}
+
+void OnMapPressed(lv_event_t *) {
+  s_map_drag_px = 0;
+  s_map_dragged = false;
+}
+
+// Zoomed in, dragging moves the map under the finger; the follow button
+// snaps it back onto the kart.
+void OnMapPressing(lv_event_t *) {
+  if (!s_map_zoomed) {
+    return;
+  }
+  lv_point_t v;
+  lv_indev_get_vect(lv_indev_active(), &v);
+  if (v.x == 0 && v.y == 0) {
+    return;
+  }
+  s_map_drag_px += std::abs(v.x) + std::abs(v.y);
+  s_map_dragged = s_map_dragged || s_map_drag_px > kMapDragSlopPx;
+  s_map_pan.x -= v.x / kMapZoomPxPerM;
+  s_map_pan.y += v.y / kMapZoomPxPerM;
+  RedrawMap();
+}
+
+void OnMapZoom(lv_event_t *) {
+  s_map_zoomed = true;
+  s_map_pan = pacer::Point{0, 0};
+  RedrawMap();
+}
+
+void OnMapFit(lv_event_t *) {
+  s_map_zoomed = false;
+  RedrawMap();
+}
+
+void OnMapFollow(lv_event_t *) {
+  s_map_pan = pacer::Point{0, 0};
+  RedrawMap();
 }
 
 void OnMenuReload(lv_event_t *) {
@@ -404,30 +592,76 @@ void OnTrackPick(lv_event_t *e) {
   ShowTrackPage(false);
 }
 
+// Lands on the main loop like the reload; nothing to pick, so the menu
+// closes straight back to the dashboard to watch the counters clear.
+void OnMenuReset(lv_event_t *) {
+  s_reset_request = true;
+  ShowMenu(false);
+}
+
 void OnTrackBack(lv_event_t *) {
   ShowTrackPage(false);
   ShowMenu(true);
 }
 
-void OnMenuReference(lv_event_t *) {
+void RefreshRecordingList();
+
+void RefreshDemoSpeedLabel() {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "Speed %dx", s_demo_speed.load());
+  lv_label_set_text(lv_obj_get_child(s_demo_speed_btn, 0), buf);
+}
+
+// Rebuilds the rows for `mode` before showing them; only the demo picker
+// carries the speed button.
+void OpenRecordingPage(RecordingMode mode) {
+  s_recording_mode = mode;
+  bool demo = mode == RecordingMode::kDemo;
+  lv_label_set_text(s_recording_title, demo ? "DEMO" : "REFERENCE LAP");
+  lv_obj_set_hidden(s_demo_speed_btn, !demo);
+  RefreshRecordingList();
   ShowMenu(false);
-  ShowReferencePage(true);
+  ShowRecordingPage(true);
+}
+
+void OnMenuReference(lv_event_t *) {
+  OpenRecordingPage(RecordingMode::kReference);
+}
+
+void OnMenuDemo(lv_event_t *) { OpenRecordingPage(RecordingMode::kDemo); }
+
+// Steps to the next speed, wrapping back to 1x; takes effect on a running
+// demo straight away.
+void OnDemoSpeed(lv_event_t *) {
+  constexpr size_t n = sizeof(kDemoSpeeds) / sizeof(kDemoSpeeds[0]);
+  size_t i = 0;
+  while (i < n && kDemoSpeeds[i] != s_demo_speed) {
+    ++i;
+  }
+  s_demo_speed = kDemoSpeeds[(i + 1) % n];
+  RefreshDemoSpeedLabel();
 }
 
 // Same hand-off as the track picker: loading the recording is the main
 // loop's job (a few seconds of SD reads), and its progress goes to the
 // status line, so the page closes straight back to the dashboard.
-void OnReferencePick(lv_event_t *e) {
+void OnRecordingPick(lv_event_t *e) {
   intptr_t idx = (intptr_t)lv_event_get_user_data(e);
-  s_reference_path = idx >= 0 && (size_t)idx < s_recordings.size()
+  std::string path = idx >= 0 && (size_t)idx < s_recordings.size()
                          ? s_recordings[idx].path
                          : std::string();
-  s_reference_request = true;
-  ShowReferencePage(false);
+  if (s_recording_mode == RecordingMode::kDemo) {
+    s_demo_path = std::move(path);
+    s_demo_request = true;
+  } else {
+    s_reference_path = std::move(path);
+    s_reference_request = true;
+  }
+  ShowRecordingPage(false);
 }
 
-void OnReferenceBack(lv_event_t *) {
-  ShowReferencePage(false);
+void OnRecordingBack(lv_event_t *) {
+  ShowRecordingPage(false);
   ShowMenu(true);
 }
 
@@ -495,11 +729,26 @@ void OnBrightnessBack(lv_event_t *) {
 }
 #endif
 
-void RefreshGateExtLabel() {
+// Puts `steps` on both gate extension sliders — the menu page's and the
+// zoomed map's — and their labels, and redraws the timing lines on the map,
+// which preview the value while it is still being dragged.
+void SetGateExtSteps(int32_t steps) {
   char buf[16];
-  snprintf(buf, sizeof(buf), "%.1f m",
-           lv_slider_get_value(s_gate_ext_slider) * kGateExtStepM);
-  lv_label_set_text(s_gate_ext_label, buf);
+  snprintf(buf, sizeof(buf), "%.1f m", steps * kGateExtStepM);
+  for (lv_obj_t *slider : {s_gate_ext_slider, s_map_ext_slider}) {
+    if (slider && lv_slider_get_value(slider) != steps) {
+      lv_slider_set_value(slider, steps, LV_ANIM_OFF);
+    }
+  }
+  for (lv_obj_t *label : {s_gate_ext_label, s_map_ext_label}) {
+    if (label) {
+      lv_label_set_text(label, buf);
+    }
+  }
+  if (s_map_page && s_map_zoomed &&
+      !lv_obj_has_flag(s_map_page, LV_OBJ_FLAG_HIDDEN)) {
+    RedrawMap();
+  }
 }
 
 void ShowGateExtPage(bool show) {
@@ -515,13 +764,27 @@ void OnMenuGateExt(lv_event_t *) {
   ShowGateExtPage(true);
 }
 
-// The label follows the drag; the value is only handed to the main loop on
-// release, since each one rebuilds every densified gate.
-void OnGateExtSlider(lv_event_t *) { RefreshGateExtLabel(); }
-
-void OnGateExtReleased(lv_event_t *) {
-  s_gate_ext_pending = lv_slider_get_value(s_gate_ext_slider);
+// The labels (and the zoomed map) follow the drag; the value is only handed
+// to the main loop on release, since each one rebuilds every densified gate.
+// Shared by both sliders.
+void OnGateExtSlider(lv_event_t *e) {
+  SetGateExtSteps(lv_slider_get_value((lv_obj_t *)lv_event_get_target(e)));
 }
+
+void OnGateExtReleased(lv_event_t *e) {
+  s_gate_ext_pending = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
+}
+
+// The zoomed map's -/+ buttons: one slider step, applied right away.
+void StepGateExt(int32_t delta) {
+  int32_t steps = std::clamp<int32_t>(
+      lv_slider_get_value(s_gate_ext_slider) + delta, 0, kGateExtMaxSteps);
+  SetGateExtSteps(steps);
+  s_gate_ext_pending = steps;
+}
+
+void OnGateExtMinus(lv_event_t *) { StepGateExt(-1); }
+void OnGateExtPlus(lv_event_t *) { StepGateExt(+1); }
 
 void OnGateExtBack(lv_event_t *) {
   ShowGateExtPage(false);
@@ -537,7 +800,7 @@ void OnScreenShortClick(lv_event_t *) {
   ShowMenu(false);
   ShowLoggingPage(false);
   ShowTrackPage(false);
-  ShowReferencePage(false);
+  ShowRecordingPage(false);
   ShowGateExtPage(false);
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
   ShowBrightnessPage(false);
@@ -821,39 +1084,39 @@ void InitReferenceStyles() {
 
 // Characters of the 20 px face (12 px advance) across a row: 464 px of list
 // less the row's padding and the active border.
-constexpr size_t kReferenceRowChars = 36;
+constexpr size_t kRecordingRowChars = 36;
 
 // "SESS_012  brands-hatch     14:32": `left` (name, then the guessed track)
 // cut short with a '.' where it would run into `right`, which sits flush
 // against the right edge.
-std::string ReferenceRowText(const std::string &left_name,
+std::string RecordingRowText(const std::string &left_name,
                              const std::string &track,
                              const std::string &right) {
   std::string left = left_name;
   if (!track.empty()) {
     left += "  " + track;
   }
-  size_t room = kReferenceRowChars - std::min(right.size() + 2,
-                                              kReferenceRowChars);
+  size_t room = kRecordingRowChars - std::min(right.size() + 2,
+                                              kRecordingRowChars);
   if (left.size() > room) {
     left.resize(room > 0 ? room - 1 : 0);
     left += '.';
   }
-  left.resize(kReferenceRowChars - std::min(right.size(), kReferenceRowChars),
+  left.resize(kRecordingRowChars - std::min(right.size(), kRecordingRowChars),
               ' ');
   return left + right;
 }
 
 // One picker row. `dim` greys out rows from another track.
-void MakeReferenceRow(intptr_t index, const std::string &text, bool active,
+void MakeRecordingRow(intptr_t index, const std::string &text, bool active,
                       bool dim = false) {
-  lv_obj_t *row = lv_button_create(s_reference_list);
+  lv_obj_t *row = lv_button_create(s_recording_list);
   lv_obj_add_style(row, &s_ref_row_style, 0);
   if (active) {
     lv_obj_add_style(row, &s_ref_row_active_style, 0);
   }
   lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_event_cb(row, OnReferencePick, LV_EVENT_CLICKED, (void *)index);
+  lv_obj_add_event_cb(row, OnRecordingPick, LV_EVENT_CLICKED, (void *)index);
 
   lv_obj_t *label = lv_label_create(row);
   lv_obj_add_style(label, &s_ref_label_style, 0);
@@ -867,13 +1130,17 @@ void MakeReferenceRow(intptr_t index, const std::string &text, bool active,
   lv_obj_center(label);
 }
 
-// Rebuilds the picker's rows from s_recordings. Caller holds the LVGL lock.
-void RefreshReferenceList(const std::string &active_path, double active_lap_s) {
-  lv_obj_clean(s_reference_list);
+// Rebuilds the picker's rows from s_recordings for the mode it is open in.
+// Caller holds the LVGL lock.
+void RefreshRecordingList() {
+  lv_obj_clean(s_recording_list);
 
+  bool demo = s_recording_mode == RecordingMode::kDemo;
+  const std::string &active_path =
+      demo ? s_demo_active_path : s_reference_active_path;
   bool none_active = active_path.empty();
-  MakeReferenceRow(kReferencePickNone,
-                   ReferenceRowText("Session best", "",
+  MakeRecordingRow(kRecordingPickNone,
+                   RecordingRowText(demo ? "Live GPS" : "Session best", "",
                                     none_active ? "active" : ""),
                    none_active);
   for (size_t i = 0; i < s_recordings.size(); ++i) {
@@ -882,9 +1149,11 @@ void RefreshReferenceList(const std::string &active_path, double active_lap_s) {
     // The row in use shows the lap it gave in place of its length; the
     // length is no longer the question once it has been picked.
     char detail[24];
-    if (active) {
+    if (active && demo) {
+      snprintf(detail, sizeof(detail), "playing");
+    } else if (active) {
       char lap[16];
-      FormatLapTime(lap, sizeof(lap), active_lap_s);
+      FormatLapTime(lap, sizeof(lap), s_reference_active_lap_s);
       snprintf(detail, sizeof(detail), "REF %s", lap);
     } else if (rec.live) {
       snprintf(detail, sizeof(detail), "now");
@@ -894,13 +1163,16 @@ void RefreshReferenceList(const std::string &active_path, double active_lap_s) {
     }
     std::string track =
         rec.track_path.empty() ? "?" : TrackDisplayName(rec.track_path);
-    MakeReferenceRow(
+    // A demo loads the track its recording was driven on, so only rows with
+    // no known track are dimmed there: they play, but nothing gets timed.
+    bool dim = demo ? rec.track_path.empty() : !rec.on_loaded_track;
+    MakeRecordingRow(
         (intptr_t)i,
-        ReferenceRowText(RecordingDisplayName(rec.path), track, detail),
-        active, !rec.on_loaded_track);
+        RecordingRowText(RecordingDisplayName(rec.path), track, detail),
+        active, dim);
   }
   if (s_recordings.empty()) {
-    lv_obj_t *empty = lv_label_create(s_reference_list);
+    lv_obj_t *empty = lv_label_create(s_recording_list);
     lv_obj_add_style(empty, &s_ref_label_style, 0);
     lv_obj_add_style(empty, &s_ref_label_dim_style, 0);
     lv_label_set_text(empty, "no recordings on card");
@@ -908,27 +1180,27 @@ void RefreshReferenceList(const std::string &active_path, double active_lap_s) {
 
   lv_mem_monitor_t mon;
   lv_mem_monitor(&mon);
-  ESP_LOGI(TAG, "reference list: %u rows, lvgl heap %u%% used, %u B free",
+  ESP_LOGI(TAG, "recording list: %u rows, lvgl heap %u%% used, %u B free",
            (unsigned)s_recordings.size() + 1, (unsigned)mon.used_pct,
            (unsigned)mon.free_size);
 }
 
 // Full-screen, same header as the track picker; under it a scrolling column
 // of rows, since a card collects a log per boot.
-void BuildReferencePage(lv_obj_t *scr) {
-  s_reference_page = lv_obj_create(scr);
-  lv_obj_set_size(s_reference_page, kWidth, kHeight);
-  lv_obj_set_pos(s_reference_page, 0, 0);
-  lv_obj_set_style_bg_color(s_reference_page, lv_color_hex(0x101010), 0);
-  lv_obj_set_style_border_width(s_reference_page, 0, 0);
-  lv_obj_set_style_radius(s_reference_page, 0, 0);
-  lv_obj_set_style_pad_all(s_reference_page, 8, 0);
-  lv_obj_set_style_pad_row(s_reference_page, 6, 0);
-  lv_obj_remove_flag(s_reference_page, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(s_reference_page, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_flex_flow(s_reference_page, LV_FLEX_FLOW_COLUMN);
+void BuildRecordingPage(lv_obj_t *scr) {
+  s_recording_page = lv_obj_create(scr);
+  lv_obj_set_size(s_recording_page, kWidth, kHeight);
+  lv_obj_set_pos(s_recording_page, 0, 0);
+  lv_obj_set_style_bg_color(s_recording_page, lv_color_hex(0x101010), 0);
+  lv_obj_set_style_border_width(s_recording_page, 0, 0);
+  lv_obj_set_style_radius(s_recording_page, 0, 0);
+  lv_obj_set_style_pad_all(s_recording_page, 8, 0);
+  lv_obj_set_style_pad_row(s_recording_page, 6, 0);
+  lv_obj_remove_flag(s_recording_page, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_recording_page, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_flex_flow(s_recording_page, LV_FLEX_FLOW_COLUMN);
 
-  lv_obj_t *header = lv_obj_create(s_reference_page);
+  lv_obj_t *header = lv_obj_create(s_recording_page);
   lv_obj_set_width(header, lv_pct(100));
   lv_obj_set_height(header, LV_SIZE_CONTENT);
   lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
@@ -943,20 +1215,29 @@ void BuildReferencePage(lv_obj_t *scr) {
   lv_obj_set_style_text_font(title, &pacer_font_mono_20, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0x808080), 0);
   lv_label_set_text(title, "REFERENCE LAP");
-  lv_obj_set_width(MakeButton(header, "Back", OnReferenceBack), 96);
+  // Retitled per mode by OpenRecordingPage; growing it pushes the buttons
+  // to the right edge whether or not the speed button is shown.
+  s_recording_title = title;
+  lv_obj_set_flex_grow(title, 1);
+  lv_obj_set_style_pad_column(header, 8, 0);
+  s_demo_speed_btn = MakeButton(header, "", OnDemoSpeed);
+  lv_obj_set_width(s_demo_speed_btn, 156);
+  lv_obj_add_flag(s_demo_speed_btn, LV_OBJ_FLAG_HIDDEN);
+  RefreshDemoSpeedLabel();
+  lv_obj_set_width(MakeButton(header, "Back", OnRecordingBack), 96);
 
-  s_reference_list = lv_obj_create(s_reference_page);
-  lv_obj_set_width(s_reference_list, lv_pct(100));
-  lv_obj_set_flex_grow(s_reference_list, 1);
-  lv_obj_set_style_bg_opa(s_reference_list, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(s_reference_list, 0, 0);
-  lv_obj_set_style_pad_all(s_reference_list, 0, 0);
-  lv_obj_set_style_pad_row(s_reference_list, 6, 0);
-  lv_obj_set_flex_flow(s_reference_list, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_scroll_dir(s_reference_list, LV_DIR_VER);
+  s_recording_list = lv_obj_create(s_recording_page);
+  lv_obj_set_width(s_recording_list, lv_pct(100));
+  lv_obj_set_flex_grow(s_recording_list, 1);
+  lv_obj_set_style_bg_opa(s_recording_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(s_recording_list, 0, 0);
+  lv_obj_set_style_pad_all(s_recording_list, 0, 0);
+  lv_obj_set_style_pad_row(s_recording_list, 6, 0);
+  lv_obj_set_flex_flow(s_recording_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(s_recording_list, LV_DIR_VER);
 
   InitReferenceStyles();
-  RefreshReferenceList("", 0);
+  RefreshRecordingList();
 }
 
 lv_obj_t *MakeMapLine(lv_color_t color, int32_t width) {
@@ -981,8 +1262,13 @@ void BuildMapPage(lv_obj_t *scr) {
   // screen coordinates.
   lv_obj_set_style_pad_all(s_map_page, 0, 0);
   lv_obj_remove_flag(s_map_page, LV_OBJ_FLAG_SCROLLABLE);
+  // A drag on the zoomed map pans it; never let it go looking for something
+  // further up to scroll instead.
+  lv_obj_remove_flag(s_map_page, LV_OBJ_FLAG_SCROLL_CHAIN);
   lv_obj_add_flag(s_map_page, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(s_map_page, OnMapClicked, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(s_map_page, OnMapPressed, LV_EVENT_PRESSED, nullptr);
+  lv_obj_add_event_cb(s_map_page, OnMapPressing, LV_EVENT_PRESSING, nullptr);
   lv_obj_add_event_cb(s_map_page, OnMapDraw, LV_EVENT_DRAW_MAIN, nullptr);
 
   s_map_empty_label = lv_label_create(s_map_page);
@@ -1003,6 +1289,61 @@ void BuildMapPage(lv_obj_t *scr) {
   // Not clickable, so taps on the marker still land on the page (= back).
   lv_obj_remove_flag(s_map_marker, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(s_map_marker, LV_OBJ_FLAG_HIDDEN);
+
+  // Chrome last, so it draws over the map. Corner buttons are as big as the
+  // menu's close button so a gloved thumb finds them; RefreshMapChrome picks
+  // which ones show.
+  constexpr int32_t kCornerW = 96, kCornerH = 48;
+  s_map_zoom_btn = MakeButton(s_map_page, "Zoom", OnMapZoom);
+  lv_obj_set_size(s_map_zoom_btn, kCornerW, kCornerH);
+  lv_obj_align(s_map_zoom_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
+
+  s_map_fit_btn = MakeButton(s_map_page, "Fit", OnMapFit);
+  lv_obj_set_size(s_map_fit_btn, kCornerW, kCornerH);
+  lv_obj_align(s_map_fit_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
+
+  s_map_follow_btn = MakeButton(s_map_page, "Follow", OnMapFollow);
+  lv_obj_set_size(s_map_follow_btn, kCornerW, kCornerH);
+  lv_obj_align(s_map_follow_btn, LV_ALIGN_TOP_LEFT, 4, 4);
+
+  // Bottom bar: [-] slider value [+]. Clickable (the lv_obj default), so a
+  // tap that misses a control is swallowed rather than leaving the page.
+  s_map_ext_bar = lv_obj_create(s_map_page);
+  lv_obj_set_size(s_map_ext_bar, kWidth, 64);
+  lv_obj_align(s_map_ext_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(s_map_ext_bar, lv_color_hex(0x101010), 0);
+  lv_obj_set_style_border_width(s_map_ext_bar, 0, 0);
+  lv_obj_set_style_radius(s_map_ext_bar, 0, 0);
+  lv_obj_set_style_pad_hor(s_map_ext_bar, 6, 0);
+  lv_obj_set_style_pad_ver(s_map_ext_bar, 6, 0);
+  lv_obj_set_style_pad_column(s_map_ext_bar, 12, 0);
+  lv_obj_set_style_text_color(s_map_ext_bar, lv_color_white(), 0);
+  lv_obj_remove_flag(s_map_ext_bar, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(s_map_ext_bar, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(s_map_ext_bar, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_set_size(MakeButton(s_map_ext_bar, "-", OnGateExtMinus), 64,
+                  lv_pct(100));
+  s_map_ext_slider = lv_slider_create(s_map_ext_bar);
+  lv_obj_set_flex_grow(s_map_ext_slider, 1);
+  // Room for the knob, which overhangs both ends of the track.
+  lv_obj_set_style_margin_hor(s_map_ext_slider, 8, 0);
+  lv_slider_set_range(s_map_ext_slider, 0, kGateExtMaxSteps);
+  lv_obj_add_event_cb(s_map_ext_slider, OnGateExtSlider,
+                      LV_EVENT_VALUE_CHANGED, nullptr);
+  lv_obj_add_event_cb(s_map_ext_slider, OnGateExtReleased, LV_EVENT_RELEASED,
+                      nullptr);
+  s_map_ext_label = lv_label_create(s_map_ext_bar);
+  lv_obj_set_style_text_font(s_map_ext_label, &pacer_font_mono_24, 0);
+  lv_obj_set_style_text_color(s_map_ext_label, kMapTimingColor, 0);
+  lv_obj_set_style_text_align(s_map_ext_label, LV_TEXT_ALIGN_RIGHT, 0);
+  // "10.0 m" in the 24 px face (14.4 px advance).
+  lv_obj_set_width(s_map_ext_label, 88);
+  lv_obj_set_size(MakeButton(s_map_ext_bar, "+", OnGateExtPlus), 64,
+                  lv_pct(100));
+
+  RefreshMapChrome(false);
 }
 
 // One cell of the debug menu grid. Labels wrap rather than overflow: a 3-wide
@@ -1024,7 +1365,7 @@ lv_obj_t *MakeMenuTile(lv_obj_t *grid, int index, const char *text,
   return btn;
 }
 
-// Full-screen like the track picker: a 3x2 grid of tiles fits every entry
+// Full-screen like the track picker: a 3x3 grid of tiles fits every entry
 // without scrolling, and the dismiss button sits in the top-right corner.
 void BuildMenuPage(lv_obj_t *scr) {
   s_menu = lv_obj_create(scr);
@@ -1071,7 +1412,7 @@ void BuildMenuPage(lv_obj_t *scr) {
 
   static const int32_t kCols[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
                                   LV_GRID_TEMPLATE_LAST};
-  static const int32_t kRows[] = {LV_GRID_FR(1), LV_GRID_FR(1),
+  static const int32_t kRows[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
                                   LV_GRID_TEMPLATE_LAST};
   lv_obj_t *grid = lv_obj_create(s_menu);
   lv_obj_set_width(grid, lv_pct(100));
@@ -1088,7 +1429,7 @@ void BuildMenuPage(lv_obj_t *scr) {
   MakeMenuTile(grid, i++, "Track map", OnMenuTrackMap);
   MakeMenuTile(grid, i++, "Logging", OnMenuLogging);
 #if CONFIG_PACER_LCD_BL_GPIO >= 0
-  // The invert toggle lives on this page, which keeps the grid at 3x2.
+  // The invert toggle lives on this page, which keeps the grid at 3x3.
   MakeMenuTile(grid, i++, "Brightness", OnMenuBrightness);
 #else
   s_invert_label =
@@ -1100,6 +1441,9 @@ void BuildMenuPage(lv_obj_t *scr) {
   // Starts disabled: no track is loaded at boot.
   s_reference_tile = MakeMenuTile(grid, i++, "Reference lap", OnMenuReference);
   lv_obj_add_state(s_reference_tile, LV_STATE_DISABLED);
+  // Always enabled: a demo loads the track its recording was driven on.
+  MakeMenuTile(grid, i++, "Demo", OnMenuDemo);
+  MakeMenuTile(grid, i++, "Reset session", OnMenuReset);
 }
 
 void BuildDebugMenu(lv_obj_t *scr) {
@@ -1138,7 +1482,6 @@ void BuildDebugMenu(lv_obj_t *scr) {
                       LV_EVENT_VALUE_CHANGED, nullptr);
   lv_obj_add_event_cb(s_gate_ext_slider, OnGateExtReleased, LV_EVENT_RELEASED,
                       nullptr);
-  RefreshGateExtLabel();
   MakeButton(s_gate_ext_page, "Back", OnGateExtBack);
 
   s_logging_page = MakePanel(scr, "LOGGING");
@@ -1151,8 +1494,10 @@ void BuildDebugMenu(lv_obj_t *scr) {
                  OnLoggingBack);
 
   BuildTrackPage(scr);
-  BuildReferencePage(scr);
+  BuildRecordingPage(scr);
   BuildMapPage(scr);
+  // Now that both sliders exist.
+  SetGateExtSteps(lv_slider_get_value(s_gate_ext_slider));
 
   lv_obj_add_event_cb(scr, OnScreenLongPress, LV_EVENT_LONG_PRESSED, nullptr);
   lv_obj_add_event_cb(scr, OnScreenShortClick, LV_EVENT_SHORT_CLICKED,
@@ -1177,22 +1522,24 @@ void BuildScreen() {
   // Left half: the delta, huge, with the lap it is heading for underneath.
   // Right half: recent laps over the session best. Both blocks are
   // centered vertically between the debug line and the status strip.
-  constexpr int32_t kColW = kWidth / 2;
+  // The left block spans everything up to the lap table: "+12.34" in the
+  // 72 px face is ~260 px, wider than half the screen.
+  constexpr int32_t kColW = kWidth - 6 - LapTable::kFitWidth;
   constexpr int32_t kMidY = (kTopRowH + 17 + kHeight - 20) / 2;
 
-  constexpr int32_t kDeltaH = 51;    // 48 px face's line height
-  constexpr int32_t kExpectedH = 35; // 32 px face's line height
+  constexpr int32_t kDeltaH = 70;    // 72 px face's line height
+  constexpr int32_t kExpectedH = 51; // 48 px face's line height
   constexpr int32_t kLeftTop = kMidY - (kDeltaH + kExpectedH) / 2;
 
   s_delta_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_delta_label, &pacer_font_mono_48, 0);
+  lv_obj_set_style_text_font(s_delta_label, &pacer_font_mono_72, 0);
   lv_obj_set_width(s_delta_label, kColW);
   lv_obj_set_style_text_align(s_delta_label, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_pos(s_delta_label, 0, kLeftTop);
   lv_label_set_text(s_delta_label, "--.--");
 
   s_expected_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_expected_label, &pacer_font_mono_32, 0);
+  lv_obj_set_style_text_font(s_expected_label, &pacer_font_mono_48, 0);
   lv_obj_set_style_text_color(s_expected_label, lv_color_hex(0x808080), 0);
   lv_obj_set_width(s_expected_label, kColW);
   lv_obj_set_style_text_align(s_expected_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -1204,12 +1551,15 @@ void BuildScreen() {
   lv_obj_set_pos(s_lap_table->obj(), kWidth - 6 - LapTable::kFitWidth,
                  kMidY - s_lap_table->height() / 2);
 
-  // Full-width strip; long debug text scrolls marquee-style instead of
-  // running off screen.
+  // Bottom strip up to the battery readout; long debug text scrolls
+  // marquee-style instead of running under it.
+  constexpr int kBatteryW = 100;
+  constexpr int kStatusBatteryGap = 8;
   s_status_label = lv_label_create(scr);
   lv_obj_set_style_text_font(s_status_label, &pacer_font_mono_14, 0);
   lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x808080), 0);
-  lv_obj_set_width(s_status_label, kWidth - 12);
+  lv_obj_set_width(s_status_label,
+                   kWidth - 12 - kBatteryW - kStatusBatteryGap);
   lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_LEFT, 6, -4);
   lv_label_set_text(s_status_label, "starting...");
@@ -1228,7 +1578,7 @@ void BuildScreen() {
   s_battery_label = lv_label_create(scr);
   lv_obj_set_style_text_font(s_battery_label, &pacer_font_mono_14, 0);
   lv_obj_set_style_text_color(s_battery_label, lv_color_hex(0x808080), 0);
-  lv_obj_set_width(s_battery_label, 100);
+  lv_obj_set_width(s_battery_label, kBatteryW);
   lv_obj_set_style_text_align(s_battery_label, LV_TEXT_ALIGN_RIGHT, 0);
   lv_obj_align(s_battery_label, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
   lv_label_set_text(s_battery_label, "BAT: ?");
@@ -1407,7 +1757,8 @@ void dashboard_ui_update(const pacer::LiveSnapshot &snap) {
     FormatLapTime(buf, sizeof(buf), snap.expected_lap_s);
     lv_label_set_text(s_expected_label, buf);
 
-    snprintf(buf, sizeof(buf), "%+.2f", snap.delta_s);
+    // Six characters is all the 72 px face fits beside the lap table.
+    snprintf(buf, sizeof(buf), "%+.2f", std::clamp(snap.delta_s, -99.99, 99.99));
     lv_label_set_text(s_delta_label, buf);
     lv_obj_set_style_text_color(
         s_delta_label,
@@ -1456,6 +1807,10 @@ bool dashboard_ui_consume_track_reload(std::string *path_out) {
   return requested;
 }
 
+bool dashboard_ui_consume_session_reset() {
+  return s_reset_request.exchange(false);
+}
+
 void dashboard_ui_set_track_list(const std::vector<DashboardTrack> &tracks,
                                  const std::string &active_path) {
   if (!s_disp || !s_track_list) {
@@ -1470,12 +1825,14 @@ void dashboard_ui_set_track_list(const std::vector<DashboardTrack> &tracks,
 void dashboard_ui_set_recording_list(
     const std::vector<DashboardRecording> &recordings,
     const std::string &active_path, double active_lap_s) {
-  if (!s_disp || !s_reference_list) {
+  if (!s_disp || !s_recording_list) {
     return;
   }
   lvgl_port_lock(0);
   s_recordings = recordings;
-  RefreshReferenceList(active_path, active_lap_s);
+  s_reference_active_path = active_path;
+  s_reference_active_lap_s = active_lap_s;
+  RefreshRecordingList();
   lvgl_port_unlock();
 }
 
@@ -1493,6 +1850,34 @@ bool dashboard_ui_consume_reference_pick(std::string *path_out) {
   return requested;
 }
 
+void dashboard_ui_set_demo_recording(const std::string &active_path) {
+  if (!s_disp || !s_recording_list) {
+    return;
+  }
+  lvgl_port_lock(0);
+  s_demo_active_path = active_path;
+  if (s_recording_mode == RecordingMode::kDemo) {
+    RefreshRecordingList();
+  }
+  lvgl_port_unlock();
+}
+
+bool dashboard_ui_consume_demo_pick(std::string *path_out) {
+  if (!s_demo_request.load()) {
+    return false;
+  }
+  // Same pairing as dashboard_ui_consume_track_reload.
+  lvgl_port_lock(0);
+  bool requested = s_demo_request.exchange(false);
+  if (requested && path_out) {
+    *path_out = s_demo_path;
+  }
+  lvgl_port_unlock();
+  return requested;
+}
+
+int dashboard_ui_demo_speed() { return s_demo_speed; }
+
 void dashboard_ui_set_track_loaded(bool loaded) {
   if (!s_disp || !s_reference_tile) {
     return;
@@ -1509,8 +1894,7 @@ void dashboard_ui_set_gate_extension(double meters) {
   int32_t steps = std::clamp<int32_t>(
       (int32_t)std::lround(meters / kGateExtStepM), 0, kGateExtMaxSteps);
   lvgl_port_lock(0);
-  lv_slider_set_value(s_gate_ext_slider, steps, LV_ANIM_OFF);
-  RefreshGateExtLabel();
+  SetGateExtSteps(steps);
   lvgl_port_unlock();
 }
 

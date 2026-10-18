@@ -3,10 +3,12 @@
 // The driver-facing screen: NV3041A QSPI panel + GT911 touch + LVGL.
 // Layout (480x272 landscape):
 //
-//   LAP 7                        8:12   <- lap number / session elapsed
-//                           L5   48.640 <- recent laps, oldest on top,
-//       -0.42               L6   49.104    dimmed (see lap_table.hpp)
-//       48.715              LAST 48.912
+//   LAP 9                        8:12   <- lap number / session elapsed
+//                           L4   48.640 <- recent laps, oldest on top,
+//                           L5   49.104    dimmed (see lap_table.hpp)
+//       -0.42               L6   48.877
+//       48.715              L7   49.015
+//                           LAST 48.912
 //                           BEST 48.299
 //    ^ delta to the reference lap (session best, or the best lap of a
 //      recording picked in the debug menu), huge, green negative / red
@@ -90,6 +92,21 @@ void dashboard_ui_set_recording_list(
 /// empty string for "Session best", i.e. no recorded reference.
 bool dashboard_ui_consume_reference_pick(std::string *path_out);
 
+/// The "Demo" page (long press -> menu -> Demo) lists the same recordings as
+/// "Reference lap", after a "Live GPS" row (no demo), with a speed button in
+/// its header. Marks `active_path` as the one playing; pass an empty string
+/// once the demo stops. Safe to call from any task (locks LVGL).
+void dashboard_ui_set_demo_recording(const std::string &active_path);
+
+/// True exactly once after the user picks a row on the "Demo" page; the
+/// main loop polls this. `path_out` gets the log to play, or an empty string
+/// for "Live GPS", i.e. stop the demo.
+bool dashboard_ui_consume_demo_pick(std::string *path_out);
+
+/// The demo page's playback speed multiplier (1, 2, 4, 8 or 16; starts at
+/// 1). Can change while a demo plays; the main loop polls it.
+int dashboard_ui_demo_speed();
+
 /// Whether a track is loaded. Without one the debug menu's "Reference lap"
 /// tile is disabled: a recorded lap needs gates to be timed on. Safe to call
 /// from any task (locks LVGL).
@@ -104,6 +121,13 @@ void dashboard_ui_set_track_loaded(bool loaded);
 /// gates that end a sector (ReferenceTrack::sector_indices); pass empty for
 /// a single-color track. An empty `gates` clears the map back to "no
 /// track". Safe to call from any task (locks LVGL).
+///
+/// The page's "Zoom" button switches to a second view at a fixed ~80 m
+/// across, following the position (drag to pan, "Follow" to snap back),
+/// which also draws each gate's timing line — extended past both edges by
+/// the gate extension slider's value, previewed live while dragging — and
+/// carries a -/slider/+ bar driving the same value as the menu's "Gate
+/// extension" page. "Fit" goes back to the whole track.
 void dashboard_ui_set_track_map(const std::vector<pacer::Segment> &gates,
                                 const std::vector<int> &sector_splits = {});
 
@@ -126,6 +150,11 @@ void dashboard_ui_set_gate_extension(double meters);
 /// a new value; `meters_out` gets it. The main loop polls this and rebuilds
 /// the live gates (LiveTiming::UpdateGates) without resetting the session.
 bool dashboard_ui_consume_gate_extension(double *meters_out);
+
+/// True exactly once after the user taps the debug menu's "Reset session"
+/// tile; the main loop polls this and starts the session over
+/// (LiveTiming::ResetSession) on the loaded track.
+bool dashboard_ui_consume_session_reset();
 
 /// Current state of the debug menu's logging toggle (defaults to on).
 bool dashboard_ui_logging_enabled();

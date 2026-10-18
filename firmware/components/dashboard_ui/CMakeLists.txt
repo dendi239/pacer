@@ -6,6 +6,7 @@ idf_component_register(
          "fonts/pacer_font_mono_24.c"
          "fonts/pacer_font_mono_32.c"
          "fonts/pacer_font_mono_48.c"
+         "fonts/pacer_font_mono_72.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "fonts"
     REQUIRES pacer_core esp_lcd esp_driver_gpio esp_driver_i2c esp_driver_ledc esp_lcd_nv3041a

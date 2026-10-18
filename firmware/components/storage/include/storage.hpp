@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <string>
@@ -77,3 +78,27 @@ long storage_read_recording(
     const std::string &path,
     const std::function<void(int64_t timestamp_ms,
                              const uGnssDecUbxNavPvt_t &pvt)> &on_record);
+
+/// Reads a session log one record at a time, for replaying it at the pace it
+/// was recorded rather than all at once like storage_read_recording.
+class StorageRecordingReader {
+public:
+  StorageRecordingReader() = default;
+  ~StorageRecordingReader() { Close(); }
+  StorageRecordingReader(const StorageRecordingReader &) = delete;
+  StorageRecordingReader &operator=(const StorageRecordingReader &) = delete;
+
+  /// Closes whatever was open first. False if the file won't open.
+  bool Open(const std::string &path);
+  void Close();
+  bool IsOpen() const { return file_ != nullptr; }
+
+  /// The next whole record; false at the end, including a torn last record.
+  bool Next(int64_t *timestamp_ms, uGnssDecUbxNavPvt_t *pvt);
+
+  /// Back to the first record.
+  void Rewind();
+
+private:
+  FILE *file_ = nullptr;
+};

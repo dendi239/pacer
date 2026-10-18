@@ -120,3 +120,15 @@ firmware/components/dashboard_ui/fonts/gen_fonts.sh   # needs node for npx
    crossings while parked are ignored (crossings below walking pace don't
    count), and laps shorter than 15 s can't double-trigger off the extended
    start gate.
+
+## Demo mode
+
+Debug menu → **Demo** lists the card's recordings; picking one plays it back
+in place of the receiver, looping at the end, through the same timing path as
+live fixes — handy on the bench, or for showing the dashboard off the track.
+The recording's track (nearest start line) is loaded for it; if that's the
+track already loaded, the session just restarts and any reference lap stays.
+The header's **Speed** button steps through 1/2/4/8/16x, live. Gaps over a
+second in the recording (logging paused, the pits) play as one second.
+The receiver keeps logging to the card throughout; **Live GPS** ends the
+demo and starts the session over.

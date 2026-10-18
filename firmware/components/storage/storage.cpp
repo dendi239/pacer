@@ -352,3 +352,40 @@ long storage_read_recording(
   fclose(f);
   return total;
 }
+
+bool StorageRecordingReader::Open(const std::string &path) {
+  Close();
+  file_ = fopen(path.c_str(), "rb");
+  if (!file_) {
+    ESP_LOGE(TAG, "cannot open %s", path.c_str());
+    return false;
+  }
+  // Record-sized freads, but SD reads of many records at once: newlib's
+  // default buffer would make every few records an SPI transaction.
+  setvbuf(file_, nullptr, _IOFBF, 64 * kRecordSize);
+  return true;
+}
+
+void StorageRecordingReader::Close() {
+  if (file_) {
+    fclose(file_);
+    file_ = nullptr;
+  }
+}
+
+bool StorageRecordingReader::Next(int64_t *timestamp_ms,
+                                  uGnssDecUbxNavPvt_t *pvt) {
+  uint8_t rec[kRecordSize];
+  if (!file_ || fread(rec, kRecordSize, 1, file_) != 1) {
+    return false;
+  }
+  memcpy(timestamp_ms, rec, sizeof(*timestamp_ms));
+  memcpy(pvt, rec + sizeof(*timestamp_ms), sizeof(*pvt));
+  return true;
+}
+
+void StorageRecordingReader::Rewind() {
+  if (file_) {
+    rewind(file_);
+  }
+}

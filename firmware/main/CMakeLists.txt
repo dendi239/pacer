@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "app_main.cpp"
+    SRCS "app_main.cpp" "demo_player.cpp"
     REQUIRES pacer_core ubx_gps storage dashboard_ui esp_timer battery
 )
 

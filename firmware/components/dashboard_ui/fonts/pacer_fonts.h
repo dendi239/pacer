@@ -9,7 +9,8 @@
 // becomes an "8". A monospaced face pins each column in place.
 //
 // All of them cover ASCII 0x20-0x7F. The 32 px face also carries
-// LV_SYMBOL_GPS, the only LVGL symbol the UI draws.
+// LV_SYMBOL_GPS, the only LVGL symbol the UI draws. The 72 px face is the
+// delta alone and carries only " +-./0-9".
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +21,7 @@ extern const lv_font_t pacer_font_mono_20;
 extern const lv_font_t pacer_font_mono_24;
 extern const lv_font_t pacer_font_mono_32;
 extern const lv_font_t pacer_font_mono_48;
+extern const lv_font_t pacer_font_mono_72;
 
 #ifdef __cplusplus
 }
