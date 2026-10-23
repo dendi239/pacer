@@ -714,6 +714,7 @@ void App::RescanTrackList() {
     return;
   }
   for (const std::string &path : storage_list_tracks()) {
+    ESP_LOGI(TAG, "reading %s", path.c_str());
     DashboardTrack entry;
     entry.path = path;
     try {
