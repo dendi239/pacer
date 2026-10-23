@@ -163,3 +163,7 @@ bool dashboard_ui_logging_enabled();
 void dashboard_ui_set_log_stats(size_t written, size_t flushed);
 
 void dashboard_ui_set_battery_level(uint8_t level);
+
+void dashboard_ui_toggle_touch_enabled(void);
+
+void dashboard_ui_show_menu(bool show);

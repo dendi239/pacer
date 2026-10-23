@@ -44,6 +44,9 @@
 #include "storage.hpp"
 #include "ubx_gps.hpp"
 
+#include "iot_button.h"
+#include "button_gpio.h"
+
 namespace {
 
 const char *TAG = "pacer";
@@ -158,6 +161,13 @@ void StrapDiagTask(void *) {
   }
 }
 
+static void button_single_click_event_cb(void *arg, void *data) {
+  dashboard_ui_show_menu(false);
+}
+
+static void button_long_press_event_cb(void *arg, void *data) {
+  dashboard_ui_toggle_touch_enabled();
+}
 
 // Everything the main loop keeps between iterations, and the steps it runs
 // on each one. Single-threaded: only app_main's task touches it.
@@ -289,6 +299,23 @@ void App::Start() {
   esp_err_t battery_err = battery_sensor_init(&battery_queue);
   if (battery_err != ESP_OK) {
     ESP_LOGW(TAG, "no battery gauge: %s", esp_err_to_name(battery_err));
+  }
+
+  {
+    const button_config_t btn_cfg = {
+        .long_press_time = 1000,
+        .short_press_time = 200,
+    };
+    const button_gpio_config_t btn_gpio_cfg = {
+        .gpio_num = GPIO_NUM_6,
+        .active_level = 0,
+        .enable_power_save = false,
+        .disable_pull = false,
+    };
+    button_handle_t btn;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &btn);
+    ret = iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_single_click_event_cb, NULL);
+    ret = iot_button_register_cb(btn, BUTTON_LONG_PRESS_START, NULL, button_long_press_event_cb, NULL);
   }
 
   dashboard_ui_set_gate_extension(gate_extension_m);

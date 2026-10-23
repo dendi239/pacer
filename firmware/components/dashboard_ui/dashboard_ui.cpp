@@ -59,6 +59,8 @@ constexpr bool kInvertColorsDefault = false;
 #endif
 
 lv_display_t *s_disp = nullptr;
+lv_indev_t *s_touch_dev = nullptr;
+bool s_touch_dev_enabled = true;
 esp_lcd_panel_handle_t s_panel = nullptr;
 lv_obj_t *s_lap_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
@@ -68,6 +70,7 @@ std::optional<LapTable> s_lap_table;
 lv_obj_t *s_status_label = nullptr;
 lv_obj_t *s_debug_label = nullptr;
 lv_obj_t *s_battery_label = nullptr;
+lv_obj_t *s_touch_status_label = nullptr;
 
 // Debug menu (opened by a long press anywhere on the screen).
 lv_obj_t *s_menu = nullptr;
@@ -1583,6 +1586,13 @@ void BuildScreen() {
   lv_obj_align(s_battery_label, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
   lv_label_set_text(s_battery_label, "BAT: ?");
 
+  s_touch_status_label = lv_label_create(scr);
+  lv_obj_set_style_text_font(s_touch_status_label, &pacer_font_mono_14, 0);
+  lv_obj_set_style_text_color(s_touch_status_label, lv_color_hex(0x808080), 0);
+  lv_obj_set_style_text_align(s_touch_status_label, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_align(s_touch_status_label, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_label_set_text(s_touch_status_label, "");
+
   BuildDebugMenu(scr);
 }
 
@@ -1722,7 +1732,8 @@ esp_err_t dashboard_ui_start() {
       lvgl_port_touch_cfg_t touch_cfg = {};
       touch_cfg.disp = s_disp;
       touch_cfg.handle = tp;
-      lvgl_port_add_touch(&touch_cfg);
+      s_touch_dev = lvgl_port_add_touch(&touch_cfg);
+      s_touch_dev_enabled = true;
       ESP_LOGI(TAG, "gt911 touch up");
     }
   }
@@ -1739,6 +1750,8 @@ esp_err_t dashboard_ui_start() {
   ESP_LOGI(TAG, "display up (%dx%d)", kWidth, kHeight);
   return ESP_OK;
 }
+
+void dashboard_ui_touch_status_update(void);
 
 void dashboard_ui_update(const pacer::LiveSnapshot &snap) {
   if (!s_disp) {
@@ -1770,6 +1783,8 @@ void dashboard_ui_update(const pacer::LiveSnapshot &snap) {
   }
 
   s_lap_table->Update(snap);
+
+  dashboard_ui_touch_status_update();
 
   lvgl_port_unlock();
 }
@@ -1991,4 +2006,32 @@ void dashboard_ui_set_battery_level(uint8_t level) {
   lvgl_port_lock(0);
   lv_label_set_text(s_battery_label, buf);
   lvgl_port_unlock();
+}
+
+void dashboard_ui_set_touch_enabled(bool en) {
+  if (s_touch_dev) {
+    s_touch_dev_enabled = en;
+    lv_indev_enable(s_touch_dev, s_touch_dev_enabled);
+  }
+  dashboard_ui_touch_status_update();
+}
+
+void dashboard_ui_touch_status_update(void) {
+  if (s_touch_dev) {
+    if (s_touch_dev_enabled) {
+      lv_label_set_text(s_touch_status_label, "");
+    } else {
+      lv_label_set_text(s_touch_status_label, "TOUCH: N");
+    }
+  } else {
+    lv_label_set_text(s_touch_status_label, "TOUCH: ?");
+  }
+}
+
+void dashboard_ui_toggle_touch_enabled(void) {
+  dashboard_ui_set_touch_enabled(!s_touch_dev_enabled);
+}
+
+void dashboard_ui_show_menu(bool show) {
+  ShowMenu(show);
 }
