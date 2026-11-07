@@ -14,6 +14,7 @@
 #include <pacer/map-tiles/canvas-tiles.hpp>
 #include <pacer/map-tiles/tile-store.hpp>
 #include <pacer/reference-track/reference-track.hpp>
+#include <pacer/ui/browser-paste.hpp>
 #include <pacer/ui/file-transfer.hpp>
 #include <pacer/ui/theme.hpp>
 #include <pacer/ui/track-picker.hpp>
@@ -951,7 +952,10 @@ int main(int argc, char **argv) {
   // Follow the host's dark/light setting instead of a theme of our own, and
   // don't let the .ini restore a stale one over it.
   runnerParams.imGuiWindowParams.rememberTheme = false;
-  runnerParams.callbacks.PreNewFrame = [] { pacer::FollowSystemTheme(); };
+  runnerParams.callbacks.PreNewFrame = [] {
+    pacer::FollowSystemTheme();
+    pacer::ForwardBrowserPaste();
+  };
   runnerParams.callbacks.ShowGui = [&state] { ShowAnnotatorGui(state); };
   HelloImGui::Run(runnerParams);
   return 0;

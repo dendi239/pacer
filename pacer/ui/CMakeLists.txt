@@ -14,9 +14,10 @@ else()
 endif()
 
 add_pacer_library(ui
-    SOURCES track-picker.cpp theme.cpp ${file_transfer_source}
-            ${file_dialog_source}
-    HEADERS track-picker.hpp theme.hpp file-transfer.hpp file-dialog.hpp)
+    SOURCES track-picker.cpp theme.cpp browser-paste.cpp
+            ${file_transfer_source} ${file_dialog_source}
+    HEADERS track-picker.hpp theme.hpp browser-paste.hpp file-transfer.hpp
+            file-dialog.hpp)
 target_link_libraries(pacer_ui PUBLIC imgui hello_imgui)
 
 if(APPLE)
