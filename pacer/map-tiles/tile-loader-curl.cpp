@@ -24,6 +24,7 @@ size_t CurlWriteMemoryCallback(void *contents, size_t size, size_t nmemb,
 }
 
 bool DownloadImageToMemory(const std::string &url,
+                           const std::string &post_json,
                            std::vector<unsigned char> &image_data,
                            std::string &error) {
   CURL *curl = curl_easy_init();
@@ -41,15 +42,24 @@ bool DownloadImageToMemory(const std::string &url,
   curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
-  CURLcode res = curl_easy_perform(curl);
-  if (res != CURLE_OK) {
-    error = curl_easy_strerror(res);
-    curl_easy_cleanup(curl);
-    return false;
+  struct curl_slist *headers = nullptr;
+  if (!post_json.empty()) {
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_json.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
+                     static_cast<long>(post_json.size()));
   }
+
+  CURLcode res = curl_easy_perform(curl);
   long response_code = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
   curl_easy_cleanup(curl);
+  curl_slist_free_all(headers);
+  if (res != CURLE_OK) {
+    error = curl_easy_strerror(res);
+    return false;
+  }
 
   if (response_code != 200) {
     error = "Download failed: HTTP " + std::to_string(response_code);
@@ -103,8 +113,8 @@ struct TileLoader::Impl {
       result.x = request.x;
       result.y = request.y;
       result.url = request.url;
-      result.ok =
-          DownloadImageToMemory(request.url, result.image_data, result.error);
+      result.ok = DownloadImageToMemory(request.url, request.post_json,
+                                        result.image_data, result.error);
 
       std::lock_guard<std::mutex> lock(mutex);
       completed.push_back(std::move(result));

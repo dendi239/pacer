@@ -33,6 +33,22 @@ std::string pacer::SatelliteTileUrl(int zoom, int x, int y) {
   return std::string(url_buffer);
 }
 
+std::string pacer::GoogleCreateSessionUrl(const std::string &api_key) {
+  return "https://tile.googleapis.com/v1/createSession?key=" + api_key;
+}
+
+std::string pacer::GoogleSatelliteSessionJson() {
+  return R"({"mapType":"satellite","language":"en-GB","region":"GB"})";
+}
+
+std::string pacer::GoogleTileUrl(int zoom, int x, int y,
+                                 const std::string &session,
+                                 const std::string &api_key) {
+  return "https://tile.googleapis.com/v1/2dtiles/" + std::to_string(zoom) +
+         "/" + std::to_string(x) + "/" + std::to_string(y) +
+         "?session=" + session + "&key=" + api_key;
+}
+
 double pacer::MetersPerTilePixel(double latitude, int zoom) {
   constexpr double kEarthCircumference = 2.0 * M_PI * 6378137.0;
   double lat_rad = std::clamp(latitude, -85.05112878, 85.05112878) * M_PI / 180.0;

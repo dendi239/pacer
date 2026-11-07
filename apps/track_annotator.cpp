@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -60,7 +61,21 @@ struct TrackState {
   // away), so a half-typed coordinate never moves the map.
   double lat_edit = 0.0;
   double lon_edit = 0.0;
+
+  // Imagery picker. The key is staged like the coordinates above: it only
+  // reaches the tile store (and starts a Google session) once committed.
+  int imagery_provider = 0; // index into ImageryProvider
+  std::string google_key_edit;
 };
+
+// Points the tile store at whatever the imagery picker currently says.
+static void ApplyImagery(TrackState &state) {
+  pacer::ImagerySource source;
+  source.provider = static_cast<pacer::ImageryProvider>(state.imagery_provider);
+  if (source.provider == pacer::ImageryProvider::kGoogle)
+    source.google_api_key = state.google_key_edit;
+  state.tiles.SetSource(std::move(source));
+}
 
 // Records the current document (segments + track_closed) onto the undo
 // stack and clears redo history, as usual once a new edit is made. Call
@@ -316,6 +331,26 @@ static void DrawControlPanel(TrackState &state, float width, float height) {
     pacer::SetCanvasZoomLevel(state.view, zoom_level);
   }
   ImGui::PopItemWidth();
+
+  // Imagery source. Esri's photo can be old or cloudy over a given track;
+  // Google's is often newer but needs a Map Tiles API key.
+  ImGui::Text("Imagery");
+  ImGui::SameLine();
+  ImGui::PushItemWidth(85.0f);
+  if (ImGui::Combo("##imagery", &state.imagery_provider, "Esri\0Google\0"))
+    ApplyImagery(state);
+  ImGui::PopItemWidth();
+  if (state.imagery_provider ==
+      static_cast<int>(pacer::ImageryProvider::kGoogle)) {
+    ImGui::SameLine();
+    ImGui::PushItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##google_key", "Google Maps API key",
+                             &state.google_key_edit,
+                             ImGuiInputTextFlags_Password);
+    if (ImGui::IsItemDeactivatedAfterEdit())
+      ApplyImagery(state);
+    ImGui::PopItemWidth();
+  }
 
   ImGui::Separator();
 
@@ -840,7 +875,12 @@ int main(int argc, char **argv) {
           "  --file PATH  track file to load on startup (if it exists) and\n"
           "               use as the default Save/Load path\n"
           "               (default track_annotation.json; the picker lists\n"
-          "               tracks/*.json)\n");
+          "               tracks/*.json)\n"
+          "  --imagery esri|google\n"
+          "               satellite imagery source (default esri); google\n"
+          "               reads its Map Tiles API key from the\n"
+          "               GOOGLE_MAPS_API_KEY environment variable, falling\n"
+          "               back to the key built in (if any)\n");
       return 0;
     }
   }
@@ -864,8 +904,22 @@ int main(int argc, char **argv) {
       state.view.lon = std::stod(argv[++i]);
     } else if (arg == "--file" && i + 1 < argc) {
       state.picker.path = argv[++i];
+    } else if (arg == "--imagery" && i + 1 < argc) {
+      std::string provider = argv[++i];
+      if (provider == "google")
+        state.imagery_provider =
+            static_cast<int>(pacer::ImageryProvider::kGoogle);
     }
   }
+
+  // Key precedence: environment (kept out of shell history, unlike a flag),
+  // then the one baked in at build time (-DPACER_GOOGLE_MAPS_API_KEY, set by
+  // CI from a secret). The web build has no environment, so it gets the
+  // baked key or whatever is typed into the picker.
+  state.google_key_edit = PACER_GOOGLE_MAPS_API_KEY;
+  if (const char *key = std::getenv("GOOGLE_MAPS_API_KEY"); key && *key)
+    state.google_key_edit = key;
+  ApplyImagery(state);
 
   state.lat_edit = state.view.lat;
   state.lon_edit = state.view.lon;

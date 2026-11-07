@@ -161,6 +161,31 @@ void RenderCanvasTiles(const TileStore &store, const TileCanvasView &view,
       }
     }
   }
+
+  // Provider credit, bottom-right on a dark backing so it reads over any
+  // imagery -- the providers' terms require it on screen.
+  const char *credit = store.Attribution();
+  ImVec2 credit_size = ImGui::CalcTextSize(credit);
+  ImVec2 credit_max(canvas_max.x - 4.0f, canvas_max.y - 4.0f);
+  ImVec2 credit_min(credit_max.x - credit_size.x - 8.0f,
+                    credit_max.y - credit_size.y - 4.0f);
+  draw_list->AddRectFilled(credit_min, credit_max, IM_COL32(0, 0, 0, 140),
+                           3.0f);
+  draw_list->AddText(ImVec2(credit_min.x + 4.0f, credit_min.y + 2.0f),
+                     IM_COL32(255, 255, 255, 220), credit);
+
+  // Why nothing is loading (no key, session starting or refused), centered.
+  const std::string &status = store.SourceStatus();
+  if (!status.empty()) {
+    ImVec2 size = ImGui::CalcTextSize(status.c_str());
+    ImVec2 at((canvas_min.x + canvas_max.x - size.x) * 0.5f,
+              (canvas_min.y + canvas_max.y - size.y) * 0.5f);
+    draw_list->AddRectFilled(ImVec2(at.x - 10.0f, at.y - 6.0f),
+                             ImVec2(at.x + size.x + 10.0f,
+                                    at.y + size.y + 6.0f),
+                             IM_COL32(0, 0, 0, 180), 4.0f);
+    draw_list->AddText(at, IM_COL32(255, 255, 255, 235), status.c_str());
+  }
 }
 
 } // namespace pacer

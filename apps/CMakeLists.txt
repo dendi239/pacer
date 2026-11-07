@@ -21,6 +21,15 @@ if(NOT SKBUILD)
         pacer::ui
     )
 
+    # Google Map Tiles API key baked into the binary as the default for the
+    # imagery picker; CI fills it from a repository secret. Anyone holding
+    # the build can extract it, so the key must be restricted on Google's
+    # side (API = Map Tiles only, plus a referrer for the web build).
+    set(PACER_GOOGLE_MAPS_API_KEY "" CACHE STRING
+        "Google Map Tiles API key built into track_annotator (empty: none)")
+    target_compile_definitions(track_annotator PRIVATE
+        PACER_GOOGLE_MAPS_API_KEY="${PACER_GOOGLE_MAPS_API_KEY}")
+
     if(EMSCRIPTEN)
         # hello_imgui already preloads track_annotator_assets/ at the wasm
         # filesystem root. Add the repo's annotated tracks alongside it, so

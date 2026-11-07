@@ -21,6 +21,19 @@ target_link_libraries(pacer_map-tiles PUBLIC
     hello_imgui
     stb_hello_imgui)
 
+# Google's session reply is JSON. nlohmann_json is already resolved by the
+# time we get here (see reference-track for why the target can go by either
+# name).
+if(TARGET nlohmann_json::nlohmann_json)
+    set(nlohmann_json_target nlohmann_json::nlohmann_json)
+elseif(TARGET nlohmann_json)
+    set(nlohmann_json_target nlohmann_json)
+else()
+    find_package(nlohmann_json REQUIRED)
+    set(nlohmann_json_target nlohmann_json::nlohmann_json)
+endif()
+target_link_libraries(pacer_map-tiles PRIVATE ${nlohmann_json_target})
+
 if(EMSCRIPTEN)
     # emscripten_fetch lives in a separate library that is not linked by
     # default; it must reach anything linking map-tiles, hence PUBLIC.

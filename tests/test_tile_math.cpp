@@ -53,6 +53,14 @@ TEST_CASE("SatelliteTileUrl formats zoom/y/x") {
           "World_Imagery/MapServer/tile/19/174208/261921");
 }
 
+TEST_CASE("GoogleTileUrl formats zoom/x/y with session and key") {
+  REQUIRE(pacer::GoogleTileUrl(19, 261921, 174208, "SESSION", "KEY") ==
+          "https://tile.googleapis.com/v1/2dtiles/19/261921/174208"
+          "?session=SESSION&key=KEY");
+  REQUIRE(pacer::GoogleCreateSessionUrl("KEY") ==
+          "https://tile.googleapis.com/v1/createSession?key=KEY");
+}
+
 TEST_CASE("MetersPerTilePixel halves with every zoom level") {
   double at_10 = pacer::MetersPerTilePixel(51.376, 10);
   double at_11 = pacer::MetersPerTilePixel(51.376, 11);

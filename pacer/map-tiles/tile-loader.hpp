@@ -12,6 +12,9 @@ struct TileRequest {
   int x;
   int y;
   std::string url;
+  /// Empty for an ordinary GET. Otherwise the request is a POST with this as
+  /// its application/json body (e.g. starting a Google Map Tiles session).
+  std::string post_json;
 };
 
 struct TileResult {
@@ -20,6 +23,8 @@ struct TileResult {
   int y;
   std::string url;
   bool ok = false;
+  /// The response body. Kept on failure as well, since that is where an
+  /// API explains why it refused (bad key, API not enabled, ...).
   std::vector<unsigned char> image_data;
   std::string error;
 };

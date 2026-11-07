@@ -41,7 +41,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
       - name: Configure
-        run: emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release
+        # The key ends up in the public page, so it must be restricted to
+        # this site's referrer and to the Map Tiles API in Google Cloud.
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY_WEB }}
+        run: >
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DPACER_GOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_API_KEY"
 
       - name: Build
         run: cmake --build build-web --target track_annotator

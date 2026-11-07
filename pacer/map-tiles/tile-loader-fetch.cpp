@@ -5,8 +5,8 @@
 // the main thread and calls back into wasm once the response has landed, so
 // this backend is a thin adapter that parks finished responses until the
 // render loop drains them. That also means the tile server must send
-// permissive CORS headers -- ArcGIS World_Imagery does
-// (Access-Control-Allow-Origin: *).
+// permissive CORS headers -- ArcGIS World_Imagery and Google's Map Tiles API
+// both do.
 
 #include "tile-loader.hpp"
 
@@ -32,6 +32,7 @@ struct FetchContext {
   int x;
   int y;
   std::string url;
+  std::string post_json; // must outlive the request: fetch reads it from here
 };
 
 // Fills in the parts of the result that don't depend on success, then hands
@@ -65,6 +66,10 @@ void OnSuccess(emscripten_fetch_t *fetch) {
 void OnError(emscripten_fetch_t *fetch) {
   auto *context = static_cast<FetchContext *>(fetch->userData);
   TileResult result = ResultFor(*context);
+  if (fetch->numBytes > 0) {
+    const auto *bytes = reinterpret_cast<const unsigned char *>(fetch->data);
+    result.image_data.assign(bytes, bytes + fetch->numBytes);
+  }
   // status 0 is what a CORS rejection or a dropped connection looks like
   // from here; the browser deliberately withholds the real reason.
   result.error = fetch->status == 0
@@ -84,16 +89,28 @@ TileLoader::TileLoader(size_t /*concurrency*/)
 TileLoader::~TileLoader() = default;
 
 void TileLoader::Enqueue(TileRequest request) {
+  static const char *kJsonHeaders[] = {"Content-Type", "application/json",
+                                       nullptr};
+  auto *context =
+      new FetchContext{&impl_->completed, request.zoom,  request.x,
+                       request.y,         request.url,   request.post_json};
+
   emscripten_fetch_attr_t attr;
   emscripten_fetch_attr_init(&attr);
-  std::snprintf(attr.requestMethod, sizeof(attr.requestMethod), "GET");
+  if (context->post_json.empty()) {
+    std::snprintf(attr.requestMethod, sizeof(attr.requestMethod), "GET");
+  } else {
+    std::snprintf(attr.requestMethod, sizeof(attr.requestMethod), "POST");
+    attr.requestHeaders = kJsonHeaders;
+    attr.requestData = context->post_json.data();
+    attr.requestDataSize = context->post_json.size();
+  }
   attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
   attr.onsuccess = OnSuccess;
   attr.onerror = OnError;
   attr.timeoutMSecs = 30000;
-  attr.userData = new FetchContext{&impl_->completed, request.zoom, request.x,
-                                   request.y, request.url};
-  emscripten_fetch(&attr, request.url.c_str());
+  attr.userData = context;
+  emscripten_fetch(&attr, context->url.c_str());
 }
 
 std::vector<TileResult> TileLoader::DrainResults() {

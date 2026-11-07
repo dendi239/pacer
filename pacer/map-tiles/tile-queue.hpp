@@ -51,6 +51,10 @@ public:
   /// on every frame it stays on screen.
   void Finish(const Key &key, bool ok, Clock::time_point now);
 
+  /// Forgets every failure backoff, e.g. after switching imagery source:
+  /// the old source's refusals say nothing about the new one.
+  void ClearFailures() { failures_.clear(); }
+
   bool IsInFlight(const Key &key) const { return in_flight_.count(key) > 0; }
   size_t InFlightCount() const { return in_flight_.size(); }
   size_t QueuedCount() const { return queue_.size(); }
