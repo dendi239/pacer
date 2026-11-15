@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Timeline — pacer</title>
+<meta name="description" content="Timeline is pacer's desktop app for going through a session afterwards: laps, sectors, deltas and lap-against-lap comparisons.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Same tokens as index.html; a single reading column. */
+:root {
+  color-scheme: dark;
+  --bg: #141b24; --line: #2c3948; --fg: #e9edf2; --fg-dim: #98a5b5; --amber: #e0a030;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --gutter-l: max(20px, env(safe-area-inset-left, 0px));
+  --gutter-r: max(20px, env(safe-area-inset-right, 0px));
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 17px/1.55 var(--display); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+a:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.nav { display: flex; align-items: center; gap: 10px; padding: calc(14px + env(safe-area-inset-top, 0px)) var(--gutter-r) 14px var(--gutter-l); }
+.wordmark { font: 800 22px/1 var(--display); font-stretch: 125%; letter-spacing: -.01em; text-decoration: none; margin-right: auto; }
+.wordmark i { font-style: normal; color: var(--amber); }
+.nav-link { font: 500 13px/1 var(--mono); text-decoration: none; letter-spacing: .04em; padding: 9px 12px; border: 1px solid var(--line); }
+.nav-link:hover, .nav-link[aria-current] { border-color: var(--amber); color: var(--amber); }
+main { max-width: 760px; margin: 0 auto; padding: clamp(40px, 8vw, 96px) var(--gutter-r) 72px var(--gutter-l); }
+.tag { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--amber); }
+h1 { margin: 14px 0 .3em; font: 900 clamp(2.4rem, 6.5vw, 4.4rem)/1.02 var(--display); font-stretch: 125%; letter-spacing: -.015em; text-wrap: balance; }
+.lede { margin: 0; font-size: 1.12rem; max-width: 34rem; }
+h2 { margin: 56px 0 14px; font: 800 1.5rem/1.1 var(--display); font-stretch: 118%; }
+p { max-width: 38rem; color: var(--fg-dim); }
+p.lede { color: var(--fg); }
+.cta { display: inline-block; margin-top: 28px; padding: 14px 20px; background: var(--amber); color: #141b24; font-weight: 700; text-decoration: none; }
+.cta:hover { background: var(--fg); }
+.cta + small { display: block; margin-top: 10px; font: 400 12px/1.5 var(--mono); color: var(--fg-dim); }
+ul.rows { margin: 0; padding: 0; list-style: none; }
+ul.rows li { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+ul.rows li:first-child { border-top: 1px solid var(--line); }
+ul.rows b { font: 500 12px/1.7 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-dim); }
+@media (max-width: 480px) { ul.rows li { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+pre { margin: 12px 0; padding: 14px 16px; border: 1px solid var(--line); overflow-x: auto; font: 400 13px/1.6 var(--mono); color: var(--fg); }
+footer { padding: 28px var(--gutter-r) calc(28px + env(safe-area-inset-bottom, 0px)) var(--gutter-l); border-top: 1px solid var(--line); font: 400 12px/1.6 var(--mono); color: var(--fg-dim); }
+</style>
+</head>
+<body>
+<header class="nav">
+  <a class="wordmark" href="./" aria-label="speedor home">speedor<i>.</i></a>
+  <a class="nav-link" href="track_annotator.html">Annotator</a>
+  <a class="nav-link" href="timeline.html" aria-current="page">Timeline</a>
+  <a class="nav-link" href="https://github.com/dendi239/pacer">GitHub</a>
+</header>
+
+<main>
+  <span class="tag">Desktop app · macOS</span>
+  <h1>Timeline</h1>
+  <p class="lede">Go through a session after you've driven it. Timeline opens speedor logs and GoPro footage, splits them into laps and sectors, and puts any two laps side by side.</p>
+  <a class="cta" href="https://github.com/dendi239/pacer/releases/latest">Download from GitHub Releases</a>
+  <small>timeline-macos-arm64.zip · Apple silicon · unsigned build</small>
+
+  <h2>What it does</h2>
+  <ul class="rows">
+    <li><b>Sources</b><span>Reads the .dat logs speedor writes to its SD card and the GPS track inside GoPro video files.</span></li>
+    <li><b>Laps</b><span>A sortable lap table per source, with sector times from the same track files the device uses.</span></li>
+    <li><b>Delta</b><span>The gap between two laps at every point of the circuit, so you can see where the time went.</span></li>
+    <li><b>Comparisons</b><span>Pick laps from the same session or different ones and compare them directly.</span></li>
+    <li><b>Sessions</b><span>Save what you have open and pick it up again later.</span></li>
+  </ul>
+
+  <h2>First launch</h2>
+  <p>The build is not signed, so macOS quarantines it. After unzipping, clear the flag once, or right-click the app and choose Open.</p>
+  <pre>xattr -dr com.apple.quarantine timeline.app</pre>
+
+  <h2>Other platforms</h2>
+  <p>Timeline builds from source with CMake on anything the rest of pacer builds on. The <a href="https://github.com/dendi239/pacer#getting-started">README</a> has the steps.</p>
+</main>
+
+<footer>Timeline · part of <a href="./">pacer</a></footer>
+</body>
+</html>

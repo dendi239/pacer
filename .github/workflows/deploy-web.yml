@@ -1,4 +1,4 @@
-name: Deploy track annotator to GitHub Pages
+name: Deploy site to GitHub Pages
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
       - "apps/**"
       - "pacer/**"
       - "tracks/**"
+      - "landing/**"
+      - "scripts/assemble-site.sh"
+      - "scripts/check-site-links.py"
       - "3rdparty/**"
       - "CMakeLists.txt"
       - ".github/workflows/deploy-web.yml"
@@ -52,21 +55,13 @@ jobs:
       - name: Build
         run: cmake --build build-web --target track_annotator
 
-      - name: Assemble site
+      - name: Assemble site and check its links
+        # index.html is the landing page; the annotator stays at
+        # track_annotator.html and the timeline page at timeline.html. The
+        # script fails the build if any page links to a file that is not in
+        # the site, or a landing-page track variant is missing its data.
         run: |
-          mkdir -p site
-          cp build-web/apps/track_annotator.html \
-             build-web/apps/track_annotator.js \
-             build-web/apps/track_annotator.wasm \
-             build-web/apps/track_annotator.data \
-             build-web/apps/track_annotator_favicon.png \
-             site/
-          # The shell page references its .js/.wasm/.data by relative name,
-          # so serving the same file as index.html needs no rewriting.
-          cp site/track_annotator.html site/index.html
-          # Pages runs the upload through Jekyll otherwise, which drops
-          # files it does not recognise.
-          touch site/.nojekyll
+          scripts/assemble-site.sh site --require-annotator
           ls -lh site
 
       - uses: actions/upload-pages-artifact@v3

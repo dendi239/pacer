@@ -44,8 +44,30 @@ library to open out of the box. Saving is a plain browser download of the
 same JSON schema the desktop app writes, and `Open file...` reads one back
 in off your machine.
 
-Pushing to `main` publishes it to GitHub Pages via
-`.github/workflows/deploy-web.yml`.
+### website
+
+Pushing to `main` publishes the site to GitHub Pages via
+`.github/workflows/deploy-web.yml`:
+
+- `index.html` --- the speedor landing page (`landing/`), a scroll-driven 3D
+  lap of one of the tracks, picked at random;
+- `track_annotator.html` --- the web track annotator above;
+- `timeline.html` --- about the desktop timeline app, with the download link.
+
+```bash
+scripts/build-web.sh             # the annotator, once
+scripts/assemble-site.sh --serve # whole site on http://localhost:8000
+```
+
+`assemble-site.sh` is what CI runs too. It finishes with
+`scripts/check-site-links.py`, which fails if a page links to a file that is
+not in the site or a landing-page track is missing its data. To put another
+track on the landing page, export a lap pair for it and add it to `VARIANTS`
+in `landing/index.html`:
+
+```bash
+scripts/export_racing_line.py tracks/<track>.json <recording.dat or GoPro .MP4>...
+```
 
 ### desktop releases
 
